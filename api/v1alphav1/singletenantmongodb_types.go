@@ -37,8 +37,8 @@ type SingleTenantMongoDBSpec struct {
 
 	Users []MongoUserSpec `json:"users,omitempty"`
 
-	Storage   singleTenantMongoDBStorageSpec `json:"storage"`
-	Resources resourcesSpec                  `json:"resources"`
+	Storage   SingleTenantMongoDBStorageSpec `json:"storage"`
+	Resources ResourcesSpec                  `json:"resources"`
 }
 
 type MongoAdminSpec struct {
@@ -60,16 +60,16 @@ type MongoRoleSpec struct {
 	Database string `json:"database"`
 }
 
-type singleTenantMongoDBStorageSpec struct {
+type SingleTenantMongoDBStorageSpec struct {
 	Size string `json:"size"`
 }
 
-type resourcesSpec struct {
-	Requests capacitySpec `json:"requests"`
-	Limits   capacitySpec `json:"limits"`
+type ResourcesSpec struct {
+	Requests CapacitySpec `json:"requests"`
+	Limits   CapacitySpec `json:"limits"`
 }
 
-type capacitySpec struct {
+type CapacitySpec struct {
 	Cpu    string `json:"cpu"`
 	Memory string `json:"memory"`
 }
