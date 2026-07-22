@@ -1,0 +1,2 @@
+# Ignore CRD templates (to be built in CI/CD)
+stmdb-controller/crds/**

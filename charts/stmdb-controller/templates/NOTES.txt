@@ -1,0 +1,21 @@
+{{- if .Release.IsInstall }}
+{{ .Chart.Name }} has been installed successfully.
+
+Check the controller:
+
+  kubectl rollout status deploy/{{ include "mongodb-controller.fullname" . }} -n {{ .Release.Namespace }}
+
+View logs:
+
+  kubectl logs -f deploy/{{ include "mongodb-controller.fullname" . }} -n {{ .Release.Namespace }} -c manager
+{{- end }}
+
+{{- if .Release.IsUpgrade }}
+
+{{ .Chart.Name }} has been upgraded.
+
+Verify the rollout:
+
+  kubectl rollout status deploy/{{ include "mongodb-controller.fullname" . }} -n {{ .Release.Namespace }}
+
+{{- end }}

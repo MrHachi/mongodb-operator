@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    {{- include "mongodb-controller.labels" . | nindent 4 }}
+    control-plane: stmdb-manager
+  name: {{ include "mongodb-controller.fullname" . }}-metrics-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    {{- include "mongodb-controller.selectorLabels" . | nindent 4 }}
+    control-plane: stmdb-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{- include "mongodb-controller.labels" . | nindent 4 }}
+    control-plane: stmdb-manager
+  name: {{ include "mongodb-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "mongodb-controller.selectorLabels" . | nindent 6 }}
+      control-plane: stmdb-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        {{- include "mongodb-controller.selectorLabels" . | nindent 8 }}
+        control-plane: stmdb-manager
+    spec:
+      containers:
+      - args:
+        - --metrics-bind-address=:8443
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        command:
+        - /manager
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.pullPolicy }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        ports:
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts: []
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: {{ include "mongodb-controller.fullname" . }}
+      terminationGracePeriodSeconds: 10
+      volumes: []

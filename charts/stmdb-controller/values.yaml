@@ -1,0 +1,16 @@
+# number of controller replicas to deploy
+replicas: 1
+
+image:
+  repository: stmdb-controller
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# resource requests and limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi

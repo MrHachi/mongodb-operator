@@ -1,0 +1,41 @@
+apiVersion: db.mrhachi.dev/v1alphav1
+kind: SingleTenantMongoDB
+metadata:
+  labels:
+    app.kubernetes.io/name: controller
+    app.kubernetes.io/managed-by: kustomize
+  name: singletenantmongodb-sample
+spec:
+  databaseName: notes
+  replicas: 3
+
+  admin:
+    username: admin
+    secretRef:
+      name: singletenantmongodb-sample-admin-pass
+
+  users:
+    - username: app
+      secretRef:
+        name: singletenantmongodb-sample-app-user-pass
+      roles:
+        - role: readWrite
+          database: notes
+
+    - username: operation
+      secretRef:
+        name: singletenantmongodb-sample-operation-user-pass
+      roles:
+        - role: read
+          database: notes
+
+  storage:
+    size: "2Gi"
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
