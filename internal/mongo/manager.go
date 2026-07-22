@@ -54,10 +54,8 @@ type mongoCommandResultResponse struct {
 }
 
 type MongoRSManager struct {
-	client    *mongo.Client
-	name      string
-	namespace string
-	uri       string
+	client *mongo.Client
+	uri    string
 }
 
 func NewMongoRSManager(ctx context.Context, uri string) (*MongoRSManager, error) {
@@ -169,22 +167,6 @@ func (mrm *MongoRSManager) syncUser(
 	}
 
 	return nil
-}
-
-func (mrm *MongoRSManager) userExists(ctx context.Context, db, username string) (bool, error) {
-	var result bson.M
-	err := mrm.client.Database(db).RunCommand(ctx, bson.D{
-		{Key: "usersInfo", Value: username},
-	}).Decode(&result)
-	if err != nil {
-		return false, fmt.Errorf("get usersInfo: %w", err)
-	}
-
-	users, ok := result["users"].(bson.A)
-	if !ok {
-		return false, fmt.Errorf("could not convert response to bson.A: %+v", users)
-	}
-	return len(users) != 0, nil
 }
 
 func (mrm *MongoRSManager) createUser(ctx context.Context, db string, after MongoUser) error {

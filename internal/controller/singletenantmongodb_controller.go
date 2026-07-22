@@ -40,7 +40,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	api "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
-	mrhachidevv1alphav1 "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
 	"github.com/mrhachi/single-tenant-mongo-db/internal/mongo"
 	"github.com/mrhachi/single-tenant-mongo-db/internal/resources"
 )
@@ -97,7 +96,7 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, fmt.Errorf("reconcile config map: %w", err)
 	}
 
-	if _, err := r.ensureKeyfileSecret(ctx, stmdb); err != nil {
+	if err := r.ensureKeyfileSecret(ctx, stmdb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure keyfile: %w", err)
 	}
 
@@ -145,19 +144,15 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	members := make([]mongo.RSMember, len(pods))
-	for idx, _ := range pods {
+	for idx := range pods {
 		members[idx] = mongo.MakeRSMember(
 			idx,
 			sts.Name, svc.Name, sts.Namespace,
 		)
 	}
 
-	if err := r.ReconcileSecrets(ctx, stmdb); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconcile secrets: %w", err)
-	}
-
 	adminSecret := &corev1.Secret{}
-	if err := r.Client.Get(
+	if err := r.Get(
 		ctx,
 		types.NamespacedName{
 			Name:      stmdb.Spec.Admin.SecretRef.Name,
@@ -208,7 +203,7 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 	users := make([]mongo.MongoUser, len(stmdb.Spec.Users))
 	for idx, user := range stmdb.Spec.Users {
 		userSecret := &corev1.Secret{}
-		if err := r.Client.Get(
+		if err := r.Get(
 			ctx,
 			types.NamespacedName{
 				Name:      user.SecretRef.Name,
@@ -272,7 +267,7 @@ func allPodsReady(pods []corev1.Pod) (bool, int) {
 // SetupWithManager sets up the controller with the Manager.
 func (r *SingleTenantMongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&mrhachidevv1alphav1.SingleTenantMongoDB{}).
+		For(&api.SingleTenantMongoDB{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
@@ -287,7 +282,7 @@ func (r *SingleTenantMongoDBReconciler) GetPods(ctx context.Context, sts *appsv1
 	if err != nil {
 		return nil, fmt.Errorf("invalid sts selector: %w", err)
 	}
-	if err := r.Client.List(
+	if err := r.List(
 		ctx,
 		&podList,
 		client.InNamespace(sts.Namespace),
@@ -300,24 +295,13 @@ func (r *SingleTenantMongoDBReconciler) GetPods(ctx context.Context, sts *appsv1
 	return podList.Items, nil
 }
 
-// Reconciles Secrets
-func (r *SingleTenantMongoDBReconciler) ReconcileSecrets(
-	ctx context.Context,
-	stmdb *api.SingleTenantMongoDB,
-) error {
-	if _, err := r.ensureKeyfileSecret(ctx, stmdb); err != nil {
-		return fmt.Errorf("ensure keyfile secret: %w", err)
-	}
-	return nil
-}
-
 func (r *SingleTenantMongoDBReconciler) reconcileStatefulSet(
 	ctx context.Context,
 	desired *api.SingleTenantMongoDB,
 ) (*appsv1.StatefulSet, error) {
 	dSts := resources.MakeDesiredSts(desired)
 	aSts := &appsv1.StatefulSet{}
-	if err := r.Client.Get(
+	if err := r.Get(
 		ctx,
 		types.NamespacedName{
 			Namespace: desired.Namespace,
@@ -334,7 +318,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileStatefulSet(
 			); err != nil {
 				return nil, fmt.Errorf("set owner reference: %w", err)
 			}
-			if err := r.Client.Create(
+			if err := r.Create(
 				ctx,
 				dSts,
 			); err != nil {
@@ -357,7 +341,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileStatefulSet(
 		return aSts, nil
 	}
 
-	if err := r.Client.Patch(
+	if err := r.Patch(
 		ctx,
 		aSts,
 		client.MergeFrom(original),
@@ -374,7 +358,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileService(
 ) (*corev1.Service, error) {
 	dSvc := resources.MakeDesiredSvc(desired)
 	aSvc := &corev1.Service{}
-	if err := r.Client.Get(
+	if err := r.Get(
 		ctx,
 		types.NamespacedName{
 			Namespace: desired.Namespace,
@@ -391,7 +375,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileService(
 			); err != nil {
 				return nil, fmt.Errorf("set owner reference: %w", err)
 			}
-			if err := r.Client.Create(
+			if err := r.Create(
 				ctx,
 				dSvc,
 			); err != nil {
@@ -413,7 +397,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileService(
 		return aSvc, nil
 	}
 
-	if err := r.Client.Patch(
+	if err := r.Patch(
 		ctx,
 		aSvc,
 		client.MergeFrom(original),
@@ -432,7 +416,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 
 	dCm := resources.MakeDesiredCm(desired)
 	aCm := &corev1.ConfigMap{}
-	if err := r.Client.Get(
+	if err := r.Get(
 		ctx,
 		types.NamespacedName{
 			Namespace: desired.Namespace,
@@ -449,7 +433,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 			); err != nil {
 				return nil, fmt.Errorf("set owner reference: %w", err)
 			}
-			if err := r.Client.Create(
+			if err := r.Create(
 				ctx,
 				dCm,
 			); err != nil {
@@ -470,7 +454,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 		return aCm, nil
 	}
 
-	if err := r.Client.Patch(
+	if err := r.Patch(
 		ctx,
 		aCm,
 		client.MergeFrom(original),
@@ -485,11 +469,11 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 	ctx context.Context,
 	desired *api.SingleTenantMongoDB,
-) (*corev1.Secret, error) {
+) error {
 	secretName := fmt.Sprintf("%s-kf", desired.Name)
 
 	aSecret := &corev1.Secret{}
-	if err := r.Client.Get(
+	if err := r.Get(
 		ctx,
 		types.NamespacedName{
 			Namespace: desired.Namespace,
@@ -501,7 +485,7 @@ func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 		case apierrors.IsNotFound(err):
 			kfData, err := generateKeyfileData()
 			if err != nil {
-				return nil, fmt.Errorf("generate keyfile data: %w", err)
+				return fmt.Errorf("generate keyfile data: %w", err)
 			}
 			kfSecret := resources.MakeDesiredKeyfileSecret(desired,
 				map[string]string{
@@ -513,20 +497,20 @@ func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 				kfSecret,
 				r.Scheme,
 			); err != nil {
-				return nil, fmt.Errorf("set owner reference: %w", err)
+				return fmt.Errorf("set owner reference: %w", err)
 			}
-			if err := r.Client.Create(
+			if err := r.Create(
 				ctx,
 				kfSecret,
 			); err != nil {
-				return nil, fmt.Errorf("create secret: %w", err)
+				return fmt.Errorf("create secret: %w", err)
 			}
-			return kfSecret, nil
+			return nil
 		default:
-			return nil, fmt.Errorf("find actual secret: %w", err)
+			return fmt.Errorf("find actual secret: %w", err)
 		}
 	}
-	return aSecret, nil
+	return nil
 }
 
 func generateKeyfileData() (string, error) {
