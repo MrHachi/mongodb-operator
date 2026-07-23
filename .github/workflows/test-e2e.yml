@@ -1,10 +1,16 @@
 name: E2E Tests
 
 on:
-  push:
   pull_request:
-
-permissions: {}
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
 
 jobs:
   test-e2e:
