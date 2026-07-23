@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -54,7 +55,28 @@ var _ = Describe("SingleTenantMongoDB Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: mrhachidevv1alphav1.SingleTenantMongoDBSpec{
+						DatabaseName: "test",
+						Admin: mrhachidevv1alphav1.MongoAdminSpec{
+							Username: "admin",
+							SecretRef: corev1.LocalObjectReference{
+								Name: "admin-pass",
+							},
+						},
+						Storage: mrhachidevv1alphav1.SingleTenantMongoDBStorageSpec{
+							Size: "1Gi",
+						},
+						Resources: mrhachidevv1alphav1.ResourcesSpec{
+							Requests: mrhachidevv1alphav1.CapacitySpec{
+								Cpu:    "500m",
+								Memory: "256Mi",
+							},
+							Limits: mrhachidevv1alphav1.CapacitySpec{
+								Cpu:    "1",
+								Memory: "512Mi",
+							},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
