@@ -48,3 +48,49 @@ flowchart TD
     D --> E
 
 ```
+
+## CI/CD workflows
+
+### On PR to main
+
+- Run lint check
+- Execute unit tests
+- Execute e2e tests
+- Check CRD version
+- Check controller version
+    - must have been raised if code has been touched
+    - new version MUST result in chart version
+- Check chart version
+    - must have been raised if templates have been touched
+    - `appVersion` MUST match controller version
+
+Not triggered on `.md` only PRs.
+
+### On tag push
+
+- Tag: `mongodb-v*-r*`
+    - push DB image to GHCR
+- Tag: `controller-v*`
+    - push controller image to GHCR
+- Tag: `chart-v*`
+    - push chart to GHCR
+
+Not triggered on `.md` only pushes.
+
+### On release
+
+- Tag: `mongodb-v*-r*`
+    - retag image built from the tagged commit
+- Tag: `controller-v*`
+    - retag image built from the tagged commit
+- Tag: `chart-v*`
+    - retag image built from the tagged commit
+
+## Versioning
+
+Chart version follows SemVer.
+
+appVersion matches the controller version.
+
+MongoDB image version follows
+<upstream-version>-r<revision>.
