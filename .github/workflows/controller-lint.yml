@@ -1,4 +1,4 @@
-name: Lint
+name: Controller Lint
 
 on:
   pull_request:
@@ -11,6 +11,8 @@ on:
       - main
     paths-ignore:
       - "**/*.md"
+      - database/**
+      - charts/**
 
 jobs:
   lint:
