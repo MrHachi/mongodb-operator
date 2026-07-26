@@ -1,4 +1,4 @@
-name: Controller E2E Tests
+name: E2E Tests
 
 on:
   pull_request:
@@ -11,8 +11,6 @@ on:
       - main
     paths-ignore:
       - "**/*.md"
-      - database/**
-      - charts/**
 
 jobs:
   test-e2e:
