@@ -41,7 +41,7 @@ import (
 const namespace = "controller-system"
 
 // namespace where the custom resource is deployed in
-const customResourceNamespace = "default"
+const customResourceNamespace = "cr-test"
 
 // serviceAccountName created for the project
 const serviceAccountName = "controller-controller-manager"
@@ -106,6 +106,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
+		By("creating custom resource namespace")
+		cmd := exec.Command("kubectl", "create", "ns", customResourceNamespace)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create custom resource namespace")
+
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
 		_, err = utils.Run(cmd)
@@ -130,6 +135,10 @@ var _ = Describe("Manager", Ordered, func() {
 
 		By("uninstalling CRDs")
 		cmd = exec.Command("make", "uninstall")
+		_, _ = utils.Run(cmd)
+
+		By("removing custom resource namespace")
+		cmd = exec.Command("kubectl", "delete", "ns", customResourceNamespace)
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -313,7 +322,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// Apply sample/CR and check status.
+		// Apply sample CR and check status.
 		It("should successfully reconcile a usable CR deployment", func() {
 			By("deploying CR prerequisite secrets")
 			for _, user := range sampleCustomResourceUsers {
