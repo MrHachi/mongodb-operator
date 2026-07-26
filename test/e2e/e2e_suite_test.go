@@ -33,9 +33,9 @@ import (
 
 var (
 	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "ghcr.io/mrhachi/mongodb-controller:latest"
+	managerImage = "ghcr.io/mrhachi/mongodb-controller:test"
 	// databaseImage is the database image to be built and loaded for testing.
-	databaseImage = "ghcr.io/mrhachi/mongodb:latest"
+	databaseImage = "ghcr.io/mrhachi/mongodb:stable"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )

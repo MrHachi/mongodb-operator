@@ -1,6 +1,6 @@
 apiVersion: v2
-name: stmdb-controller
-description: A Helm chart to deploy a single-tenant MongoDB controller
+name: mongodb-operator
+description: A Helm chart to deploy a single-tenant MongoDB operator
 
 # A chart can be either an 'application' or a 'library' chart.
 #

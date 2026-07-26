@@ -107,8 +107,8 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 		By("creating custom resource namespace")
-		cmd := exec.Command("kubectl", "create", "ns", customResourceNamespace)
-		_, err := utils.Run(cmd)
+		cmd = exec.Command("kubectl", "create", "ns", customResourceNamespace)
+		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create custom resource namespace")
 
 		By("installing CRDs")
@@ -323,152 +323,10 @@ var _ = Describe("Manager", Ordered, func() {
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// Apply sample CR and check status.
-		It("should successfully reconcile a usable CR deployment", func() {
-			By("deploying CR prerequisite secrets")
-			for _, user := range sampleCustomResourceUsers {
-				cmd := exec.Command("kubectl", "create", "secret", "generic",
-					user.PasswordSecretName,
-					"--from-literal", "password=T3stP@55",
-					"-n", customResourceNamespace)
-				_, err := utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred())
-			}
+		It("should successfully install a CR deployment", installCustomResource)
 
-			By("deploying a CR instance.")
-			cmd := exec.Command("kubectl", "apply", "-f",
-				sampleTemplatePath+sampleCustomResourceTemplateName,
-				"-n", customResourceNamespace)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("waiting for the CR to become ready.")
-			verifyCustomResourceReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
-					"-o", "jsonpath={.status.phase}",
-					"-n", customResourceNamespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Ready"), "custom resource in wrong status")
-			}
-			// It takes a while for the STS to create each pod, so give it some time
-			Eventually(verifyCustomResourceReady, 5*time.Minute).Should(Succeed())
-
-			var desiredCount int
-
-			By("checking the STS is ready.")
-			verifyStatefulSetReady := func(g Gomega) {
-				// Get desired pod count
-				desiredCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
-					"-o", "jsonpath={.spec.replicas}",
-					"-n", customResourceNamespace)
-				desiredCountOutput, err := utils.Run(desiredCmd)
-				g.Expect(err).NotTo(HaveOccurred())
-
-				// Get ready pod count
-				readyCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
-					"-o", "jsonpath={.status.readyReplicas}",
-					"-n", customResourceNamespace)
-				readyCountOutput, err := utils.Run(readyCmd)
-				g.Expect(err).NotTo(HaveOccurred())
-
-				// Compare the twos
-				g.Expect(readyCountOutput).To(Equal(desiredCountOutput), "stateful set ready pod count not equal to desired pod count")
-
-				desiredCount, err = strconv.Atoi(desiredCountOutput)
-				g.Expect(err).NotTo(HaveOccurred())
-			}
-			Eventually(verifyStatefulSetReady, 5*time.Minute).Should(Succeed())
-
-			By("checking the service is correctly configured.")
-			cmd = exec.Command("kubectl", "get", "svc", sampleCustomResourceName,
-				"-o", "jsonpath={.spec.clusterIP}",
-				"-n", customResourceNamespace)
-			output, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(Equal("None"), "service clusterIP is wrong")
-
-			By("checking the config map contains the expected host.")
-
-			// Build the expected hostname
-			var hostb strings.Builder
-			for ord := range desiredCount {
-				hostb.WriteString(fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local:%d,",
-					sampleCustomResourceName, ord, sampleCustomResourceName, customResourceNamespace, customResourcePort))
-			}
-			hostname := hostb.String()
-			Expect(hostname).NotTo(Equal(""), "calculated empty hostname (is desired count equal to zero?)")
-			hostname = hostname[:len(hostname)-1]
-
-			// Check the actual hostname
-			cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
-				"-o", "jsonpath={.data.host}",
-				"-n", customResourceNamespace)
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(Equal(hostname), "config map hostname is wrong")
-
-			By("checking the config map contains the expected db_name.")
-
-			// Get the expected database name
-			cmd = exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
-				"-o", "jsonpath={.spec.databaseName}",
-				"-n", customResourceNamespace)
-			databaseName, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
-			// Check the actual database name
-			cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
-				"-o", "jsonpath={.data.db_name}",
-				"-n", customResourceNamespace)
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(Equal(databaseName), "config map db_name is wrong")
-
-			By("connecting to the reconciled custom resource")
-			for idx, user := range sampleCustomResourceUsers {
-				pingDatabase := func(g Gomega) {
-					// Get the user's password from the secret
-					passwordCmd := exec.Command(
-						"kubectl", "get", "secret", user.PasswordSecretName,
-						"-o", "jsonpath={.data.password}",
-						"-n", customResourceNamespace,
-					)
-
-					passwordB64, err := utils.Run(passwordCmd)
-					Expect(err).NotTo(HaveOccurred())
-
-					passwordBytes, err := base64.StdEncoding.DecodeString(passwordB64)
-					Expect(err).NotTo(HaveOccurred())
-
-					password := string(passwordBytes)
-
-					// Build the connection string from the asserted config map values
-					u := &url.URL{
-						Scheme: "mongodb",
-						Host:   hostname,
-						Path:   "/" + databaseName,
-					}
-					if user.AuthSource != "" {
-						u.RawQuery = url.Values{
-							"authSource": []string{user.AuthSource},
-						}.Encode()
-					}
-					u.User = url.UserPassword(user.Username, password)
-					connstr := u.String()
-
-					cmd := exec.Command("kubectl", "run", "mongo-client-"+strconv.Itoa(idx),
-						"--rm", "-i", "--restart=Never", "--image=mongo:8",
-						"-n", customResourceNamespace,
-						"--command", "--", "mongosh", connstr,
-						"--eval", "quit(db.adminCommand({ ping: 1 }).ok == 1 ? 0 : 1)", // exit status 0 if ok, 1 if not
-					)
-
-					_, err = utils.Run(cmd)
-					Expect(err).NotTo(HaveOccurred())
-				}
-				Eventually(pingDatabase, 1*time.Minute).Should(Succeed())
-			}
-		})
+		// Verify CR reconciliation and usability
+		It("should reconcile a usable CR", verifyCustomResource)
 	})
 })
 
@@ -518,6 +376,155 @@ func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
+}
+
+func installCustomResource() {
+	By("deploying CR prerequisite secrets")
+	for _, user := range sampleCustomResourceUsers {
+		cmd := exec.Command("kubectl", "create", "secret", "generic",
+			user.PasswordSecretName,
+			"--from-literal", "password=T3stP@55",
+			"-n", customResourceNamespace)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	By("deploying a CR instance.")
+	cmd := exec.Command("kubectl", "apply", "-f",
+		sampleTemplatePath+sampleCustomResourceTemplateName,
+		"-n", customResourceNamespace)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("waiting for the CR to become ready.")
+	verifyCustomResourceReady := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+			"-o", "jsonpath={.status.phase}",
+			"-n", customResourceNamespace)
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal("Ready"), "custom resource in wrong status")
+	}
+	// It takes a while for the STS to create each pod, so give it some time
+	Eventually(verifyCustomResourceReady, 5*time.Minute).Should(Succeed())
+}
+
+func verifyCustomResource() {
+	var desiredCount int
+
+	By("checking the STS is ready.")
+	verifyStatefulSetReady := func(g Gomega) {
+		// Get desired pod count
+		desiredCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
+			"-o", "jsonpath={.spec.replicas}",
+			"-n", customResourceNamespace)
+		desiredCountOutput, err := utils.Run(desiredCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// Get ready pod count
+		readyCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
+			"-o", "jsonpath={.status.readyReplicas}",
+			"-n", customResourceNamespace)
+		readyCountOutput, err := utils.Run(readyCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// Compare the twos
+		g.Expect(readyCountOutput).To(Equal(desiredCountOutput), "stateful set ready pod count not equal to desired pod count")
+
+		desiredCount, err = strconv.Atoi(desiredCountOutput)
+		g.Expect(err).NotTo(HaveOccurred())
+	}
+	Eventually(verifyStatefulSetReady, 5*time.Minute).Should(Succeed())
+
+	By("checking the service is correctly configured.")
+	cmd := exec.Command("kubectl", "get", "svc", sampleCustomResourceName,
+		"-o", "jsonpath={.spec.clusterIP}",
+		"-n", customResourceNamespace)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal("None"), "service clusterIP is wrong")
+
+	By("checking the config map contains the expected host.")
+
+	// Build the expected hostname
+	var hostb strings.Builder
+	for ord := range desiredCount {
+		hostb.WriteString(fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local:%d,",
+			sampleCustomResourceName, ord, sampleCustomResourceName, customResourceNamespace, customResourcePort))
+	}
+	hostname := hostb.String()
+	Expect(hostname).NotTo(Equal(""), "calculated empty hostname (is desired count equal to zero?)")
+	hostname = hostname[:len(hostname)-1]
+
+	// Check the actual hostname
+	cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
+		"-o", "jsonpath={.data.host}",
+		"-n", customResourceNamespace)
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(hostname), "config map hostname is wrong")
+
+	By("checking the config map contains the expected db_name.")
+
+	// Get the expected database name
+	cmd = exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+		"-o", "jsonpath={.spec.databaseName}",
+		"-n", customResourceNamespace)
+	databaseName, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Check the actual database name
+	cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
+		"-o", "jsonpath={.data.db_name}",
+		"-n", customResourceNamespace)
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(databaseName), "config map db_name is wrong")
+
+	By("connecting to the reconciled custom resource")
+	for idx, user := range sampleCustomResourceUsers {
+		pingDatabase := func(g Gomega) {
+			// Get the user's password from the secret
+			passwordCmd := exec.Command(
+				"kubectl", "get", "secret", user.PasswordSecretName,
+				"-o", "jsonpath={.data.password}",
+				"-n", customResourceNamespace,
+			)
+
+			passwordB64, err := utils.Run(passwordCmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			passwordBytes, err := base64.StdEncoding.DecodeString(passwordB64)
+			Expect(err).NotTo(HaveOccurred())
+
+			password := string(passwordBytes)
+
+			// Build the connection string from the asserted config map values
+			u := &url.URL{
+				Scheme: "mongodb",
+				Host:   hostname,
+				Path:   "/" + databaseName,
+			}
+			if user.AuthSource != "" {
+				u.RawQuery = url.Values{
+					"authSource": []string{user.AuthSource},
+				}.Encode()
+			}
+			u.User = url.UserPassword(user.Username, password)
+			connstr := u.String()
+
+			cmd := exec.Command("kubectl", "run", "mongo-client-"+strconv.Itoa(idx),
+				"--rm", "-i", "--restart=Never", "--image=mongo:8",
+				"-n", customResourceNamespace,
+				"--command", "--", "mongosh", connstr,
+				"--eval", "quit(db.adminCommand({ ping: 1 }).ok == 1 ? 0 : 1)", // exit status 0 if ok, 1 if not
+			)
+
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Eventually(pingDatabase, 1*time.Minute).Should(Succeed())
+	}
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
