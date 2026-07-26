@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/mrhachi/mongodb-controller
-  newTag: test
+  newTag: stable

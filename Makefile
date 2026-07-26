@@ -1,6 +1,8 @@
 # Image URL to use all building/pushing image targets
 IMG ?= mongodb-controller:latest
 DB_IMG ?= mongodb:latest
+# Release ID to use with helm
+REL ?= mongodb-operator
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -66,7 +68,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 .PHONY: chart-test
 chart-test:
-	helm install --dry-run charts/mongodb-operator test
+	$(HELM) install --dry-run=client test charts/mongodb-operator --debug || $(HELM) template charts/mongodb-operator --debug
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -113,7 +115,7 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 .PHONY: chart-lint
 chart-lint:
-	@helm lint charts/mongodb-operator
+	@$(HELM) lint charts/mongodb-operator
 
 ##@ Build
 
@@ -191,10 +193,18 @@ install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
 	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
 
+.PHONY: chart-install
+chart-install:
+	$(HELM) install ${REL} charts/mongodb-operator
+
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
 	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+
+.PHONY: chart-uninstall
+chart-uninstall:
+	$(HELM) uninstall ${REL}
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
@@ -215,6 +225,7 @@ $(LOCALBIN):
 ## Tool Binaries
 KUBECTL ?= kubectl
 KIND ?= kind
+HELM ?= helm
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest

@@ -40,7 +40,7 @@ helm.sh/chart: {{ include "mongodb-controller.chart" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-app.kubernetes.io/name: controller
+app.kubernetes.io/component: controller
 {{- end }}
 
 {{/*
@@ -49,6 +49,7 @@ Selector labels
 {{- define "mongodb-controller.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "mongodb-controller.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+control-plane: controller-manager
 {{- end }}
 
 {{/*

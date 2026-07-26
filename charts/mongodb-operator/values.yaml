@@ -2,7 +2,7 @@
 replicas: 1
 
 image:
-  repository: mongodb-controller
+  repository: ghcr.io/mrhachi/mongodb-controller
   tag: stable
   pullPolicy: IfNotPresent
 

@@ -230,6 +230,11 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 	stmdb.Status.Phase = "Ready"
 	stmdb.Status.ReadyReplicas = int32(len(pods))
 
+	recLog.Info(
+		"single-tenant MongoDB deployment ready",
+		"name", stmdb.Name,
+	)
+
 	if err := r.Status().Update(ctx, stmdb); err != nil {
 		return ctrl.Result{}, err
 	}
