@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	mrhachidevv1alphav1 "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
+	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 	// +kubebuilder:scaffold:imports
 )
 

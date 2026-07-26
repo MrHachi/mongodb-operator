@@ -39,9 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	api "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
-	"github.com/mrhachi/single-tenant-mongo-db/internal/mongo"
-	"github.com/mrhachi/single-tenant-mongo-db/internal/resources"
+	api "github.com/mrhachi/mongodb-operator/api/v1alphav1"
+	"github.com/mrhachi/mongodb-operator/internal/mongo"
+	"github.com/mrhachi/mongodb-operator/internal/resources"
 )
 
 // SingleTenantMongoDBReconciler reconciles a SingleTenantMongoDB object

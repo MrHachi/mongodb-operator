@@ -7,7 +7,7 @@ domain: mrhachi.dev
 layout:
 - go.kubebuilder.io/v4
 projectName: controller
-repo: github.com/mrhachi/single-tenant-mongo-db
+repo: github.com/mrhachi/mongodb-operator
 resources:
 - api:
     crdVersion: v1
@@ -16,6 +16,6 @@ resources:
   domain: mrhachi.dev
   group: db
   kind: SingleTenantMongoDB
-  path: github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1
+  path: github.com/mrhachi/mongodb-operator/api/v1alphav1
   version: v1alphav1
 version: "3"

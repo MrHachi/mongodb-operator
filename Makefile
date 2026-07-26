@@ -1,5 +1,6 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= mongodb-controller:latest
+DB_IMG ?= mongodb:latest
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -127,6 +128,15 @@ docker-build: ## Build docker image with the manager.
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
+# TODO: decide on official image tag
+.PHONY: database-docker-build
+database-docker-build:
+	$(CONTAINER_TOOL) build -t ${DB_IMG} ./database
+
+.PHONY: database-docker-push
+database-docker-push:
+	$(CONTAINER_TOOL) push ${DB_IMG}
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
@@ -142,6 +152,18 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	$(CONTAINER_TOOL) buildx use controller-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm controller-builder
+	rm Dockerfile.cross
+
+# TODO: decide on official image tag
+PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+.PHONY: database-docker-buildx
+database-docker-buildx:
+	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+	- $(CONTAINER_TOOL) buildx create --name database-builder
+	$(CONTAINER_TOOL) buildx use database-builder
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${DB_IMG} -f Dockerfile.cross ./database
+	- $(CONTAINER_TOOL) buildx rm database-builder
 	rm Dockerfile.cross
 
 .PHONY: build-installer

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	api "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
+	api "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,9 +15,6 @@ func MakeDesiredSts(desired *api.SingleTenantMongoDB) *appsv1.StatefulSet {
 	secvolName := fmt.Sprintf("%s-kf", desired.Name)
 	secvolMountPath := "/etc/kf"
 	var secvolDefMode int32 = 0400
-
-	// TODO: rename notes-data to something more generic
-	imageTag := "notes-data:latest"
 
 	labels := map[string]string{
 		"app.kubernetes.io/name":      desired.Name,
@@ -71,8 +68,8 @@ func MakeDesiredSts(desired *api.SingleTenantMongoDB) *appsv1.StatefulSet {
 					Containers: []corev1.Container{
 						{
 							Name:            desired.Name,
-							Image:           imageTag,
-							ImagePullPolicy: corev1.PullNever,
+							Image:           desired.Spec.ImageTag,
+							ImagePullPolicy: desired.Spec.ImagePullPolicy,
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									Exec: &corev1.ExecAction{

@@ -34,7 +34,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/mrhachi/single-tenant-mongo-db/test/utils"
+	"github.com/mrhachi/mongodb-operator/test/utils"
 )
 
 // namespace where the controller is deployed in

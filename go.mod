@@ -1,4 +1,4 @@
-module github.com/mrhachi/single-tenant-mongo-db
+module github.com/mrhachi/mongodb-operator
 
 go 1.26.0
 

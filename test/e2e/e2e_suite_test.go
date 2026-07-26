@@ -28,14 +28,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/mrhachi/single-tenant-mongo-db/test/utils"
+	"github.com/mrhachi/mongodb-operator/test/utils"
 )
 
 var (
 	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "example.com/controller:v0.0.1"
+	managerImage = "ghcr.io/mrhachi/mongodb-controller:latest"
 	// databaseImage is the database image to be built and loaded for testing.
-	databaseImage = "notes-data:latest" // TODO: decide on official image tag
+	databaseImage = "ghcr.io/mrhachi/mongodb:latest"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -65,7 +65,7 @@ var _ = BeforeSuite(func() {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
 	By("building the database image")
-	cmd = exec.Command("make", "database-docker-build", fmt.Sprintf("IMG=%s", databaseImage))
+	cmd = exec.Command("make", "database-docker-build", fmt.Sprintf("DB_IMG=%s", databaseImage))
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the database image")
 
