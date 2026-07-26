@@ -34,6 +34,8 @@ import (
 var (
 	// managerImage is the manager image to be built and loaded for testing.
 	managerImage = "example.com/controller:v0.0.1"
+	// databaseImage is the database image to be built and loaded for testing.
+	databaseImage = "notes-data:latest" // TODO: decide on official image tag
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -61,6 +63,15 @@ var _ = BeforeSuite(func() {
 	By("loading the manager image on Kind")
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+
+	By("building the database image")
+	cmd = exec.Command("make", "database-docker-build", fmt.Sprintf("IMG=%s", databaseImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the database image")
+
+	By("loading the database image on Kind")
+	err = utils.LoadImageToKindClusterWithName(databaseImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the database image into Kind")
 
 	configureKubectlKubeRC()
 	setupCertManager()

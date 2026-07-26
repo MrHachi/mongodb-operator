@@ -20,11 +20,15 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -33,8 +37,11 @@ import (
 	"github.com/mrhachi/single-tenant-mongo-db/test/utils"
 )
 
-// namespace where the project is deployed in
+// namespace where the controller is deployed in
 const namespace = "controller-system"
+
+// namespace where the custom resource is deployed in
+const customResourceNamespace = "default"
 
 // serviceAccountName created for the project
 const serviceAccountName = "controller-controller-manager"
@@ -44,6 +51,42 @@ const metricsServiceName = "controller-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "controller-metrics-binding"
+
+// customResourceTypeName is the name of the CR type
+const customResourceTypeName = "singletenantmongodb"
+
+// sampleCustomResourceName is the name of the custom resource to to be created
+const sampleCustomResourceName = customResourceTypeName + "-sample"
+
+// customResourcePort is the port number the custom resource uses
+const customResourcePort = 27017
+
+// sampleTemplatePath is the path to the directory that contains sample templates
+// sampleCustomResourceTemplateName is the name of the custom resource sample template to apply to the test cluster
+const (
+	sampleTemplatePath               = "config/samples/"
+	sampleCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
+)
+
+// sampleCustomResourceUsers is the list of usernames and secrets that serve as prerequisites to the custom resource
+var sampleCustomResourceUsers = [...]SampleUser{
+	{
+		Username: "admin", PasswordSecretName: sampleCustomResourceName + "-admin-pass",
+		AuthSource: "admin",
+	},
+	{
+		Username: "app", PasswordSecretName: sampleCustomResourceName + "-app-user-pass",
+	},
+	{
+		Username: "operation", PasswordSecretName: sampleCustomResourceName + "-operation-user-pass",
+	},
+}
+
+type SampleUser struct {
+	Username           string
+	PasswordSecretName string
+	AuthSource         string
+}
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -270,15 +313,153 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		// Apply sample/CR and check status.
+		It("should successfully reconcile a usable CR deployment", func() {
+			By("deploying CR prerequisite secrets")
+			for _, user := range sampleCustomResourceUsers {
+				cmd := exec.Command("kubectl", "create", "secret", "generic",
+					user.PasswordSecretName,
+					"--from-literal", "password=T3stP@55",
+					"-n", customResourceNamespace)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("deploying a CR instance.")
+			cmd := exec.Command("kubectl", "apply", "-f",
+				sampleTemplatePath+sampleCustomResourceTemplateName,
+				"-n", customResourceNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the CR to become ready.")
+			verifyCustomResourceReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+					"-o", "jsonpath={.status.phase}",
+					"-n", customResourceNamespace)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Ready"), "custom resource in wrong status")
+			}
+			// It takes a while for the STS to create each pod, so give it some time
+			Eventually(verifyCustomResourceReady, 5*time.Minute).Should(Succeed())
+
+			var desiredCount int
+
+			By("checking the STS is ready.")
+			verifyStatefulSetReady := func(g Gomega) {
+				// Get desired pod count
+				desiredCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
+					"-o", "jsonpath={.spec.replicas}",
+					"-n", customResourceNamespace)
+				desiredCountOutput, err := utils.Run(desiredCmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Get ready pod count
+				readyCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
+					"-o", "jsonpath={.status.readyReplicas}",
+					"-n", customResourceNamespace)
+				readyCountOutput, err := utils.Run(readyCmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Compare the twos
+				g.Expect(readyCountOutput).To(Equal(desiredCountOutput), "stateful set ready pod count not equal to desired pod count")
+
+				desiredCount, err = strconv.Atoi(desiredCountOutput)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyStatefulSetReady, 5*time.Minute).Should(Succeed())
+
+			By("checking the service is correctly configured.")
+			cmd = exec.Command("kubectl", "get", "svc", sampleCustomResourceName,
+				"-o", "jsonpath={.spec.clusterIP}",
+				"-n", customResourceNamespace)
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("None"), "service clusterIP is wrong")
+
+			By("checking the config map contains the expected host.")
+
+			// Build the expected hostname
+			var hostb strings.Builder
+			for ord := range desiredCount {
+				hostb.WriteString(fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local:%d,",
+					sampleCustomResourceName, ord, sampleCustomResourceName, customResourceNamespace, customResourcePort))
+			}
+			hostname := hostb.String()
+			Expect(hostname).NotTo(Equal(""), "calculated empty hostname (is desired count equal to zero?)")
+			hostname = hostname[:len(hostname)-1]
+
+			// Check the actual hostname
+			cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
+				"-o", "jsonpath={.data.host}",
+				"-n", customResourceNamespace)
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal(hostname), "config map hostname is wrong")
+
+			By("checking the config map contains the expected db_name.")
+
+			// Get the expected database name
+			cmd = exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+				"-o", "jsonpath={.spec.databaseName}",
+				"-n", customResourceNamespace)
+			databaseName, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Check the actual database name
+			cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
+				"-o", "jsonpath={.data.db_name}",
+				"-n", customResourceNamespace)
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal(databaseName), "config map db_name is wrong")
+
+			By("connecting to the reconciled custom resource")
+			for idx, user := range sampleCustomResourceUsers {
+				pingDatabase := func(g Gomega) {
+					// Get the user's password from the secret
+					passwordCmd := exec.Command(
+						"kubectl", "get", "secret", user.PasswordSecretName,
+						"-o", "jsonpath={.data.password}",
+						"-n", customResourceNamespace,
+					)
+
+					passwordB64, err := utils.Run(passwordCmd)
+					Expect(err).NotTo(HaveOccurred())
+
+					passwordBytes, err := base64.StdEncoding.DecodeString(passwordB64)
+					Expect(err).NotTo(HaveOccurred())
+
+					password := string(passwordBytes)
+
+					// Build the connection string from the asserted config map values
+					u := &url.URL{
+						Scheme: "mongodb",
+						Host:   hostname,
+						Path:   "/" + databaseName,
+					}
+					if user.AuthSource != "" {
+						u.RawQuery = url.Values{
+							"authSource": []string{user.AuthSource},
+						}.Encode()
+					}
+					u.User = url.UserPassword(user.Username, password)
+					connstr := u.String()
+
+					cmd := exec.Command("kubectl", "run", "mongo-client-"+strconv.Itoa(idx),
+						"--rm", "-i", "--restart=Never", "--image=mongo:8",
+						"-n", customResourceNamespace,
+						"--command", "--", "mongosh", connstr,
+						"--eval", "quit(db.adminCommand({ ping: 1 }).ok == 1 ? 0 : 1)", // exit status 0 if ok, 1 if not
+					)
+
+					_, err = utils.Run(cmd)
+					Expect(err).NotTo(HaveOccurred())
+				}
+				Eventually(pingDatabase, 1*time.Minute).Should(Succeed())
+			}
+		})
 	})
 })
 
