@@ -23,10 +23,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Helm
+      - name: Install the latest version of Helm
         uses: azure/setup-helm@v5
-        with:
-          version: 'v4.2'
+
+      - name: Verify Helm installation
+        run: helm version
 
       - name: Lint mongodb-operator chart
         run: make chart-lint

@@ -114,11 +114,11 @@ var _ = Describe("Operator", Ordered, func() {
 	// After all tests have been executed, clean up by deleting the namespace.
 	AfterAll(func() {
 		By("removing clusterrolebinding")
-		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", "controller-metrics-binding")
+		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", "controller-metrics-binding")
 		_, _ = utils.Run(cmd)
 
 		By("removing custom resource namespace")
-		cmd := exec.Command("kubectl", "delete", "ns", customResourceNamespace)
+		cmd = exec.Command("kubectl", "delete", "ns", customResourceNamespace)
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -190,6 +190,19 @@ var _ = Describe("Operator", Ordered, func() {
 			cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 			_, _ = utils.Run(cmd)
 
+			By("deleting any custom resources")
+			cmd = exec.Command("kubectl", "delete", "-f",
+				sampleTemplatePath+sampleCustomResourceTemplateName,
+				"-n", customResourceNamespace)
+			_, _ = utils.Run(cmd)
+
+			for _, user := range sampleCustomResourceUsers {
+				cmd := exec.Command("kubectl", "delete", "secret",
+					user.PasswordSecretName,
+					"-n", customResourceNamespace)
+				_, _ = utils.Run(cmd)
+			}
+
 			By("undeploying the controller-manager")
 			cmd = exec.Command("make", "undeploy")
 			_, _ = utils.Run(cmd)
@@ -221,12 +234,21 @@ var _ = Describe("Operator", Ordered, func() {
 		})
 
 		AfterAll(func() {
-			By("cleaning up the curl pod for metrics")
-			cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+			By("deleting any custom resources")
+			cmd := exec.Command("kubectl", "delete", "-f",
+				sampleTemplatePath+sampleCustomResourceTemplateName,
+				"-n", customResourceNamespace)
 			_, _ = utils.Run(cmd)
 
+			for _, user := range sampleCustomResourceUsers {
+				cmd := exec.Command("kubectl", "delete", "secret",
+					user.PasswordSecretName,
+					"-n", customResourceNamespace)
+				_, _ = utils.Run(cmd)
+			}
+
 			By("uninstalling the Helm chart")
-			cmd = exec.Command("make", "chart-uninstall", fmt.Sprintf(`HELM="helm -n %s"`, namespace))
+			cmd = exec.Command("make", "chart-uninstall", fmt.Sprintf(`HELM=helm -n %s`, namespace))
 			_, _ = utils.Run(cmd)
 		})
 
