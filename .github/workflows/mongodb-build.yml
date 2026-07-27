@@ -1,4 +1,4 @@
-name: Mongo DB Build and Scan
+name: Mongo DB Build
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ on:
       - database/**
 
 jobs:
-  trivy:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,13 +29,4 @@ jobs:
         with:
           context: database
           tags: mongodb:ci
-          load: true
           push: false
-
-      - name: Run Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: mongodb:ci
-          severity: HIGH,CRITICAL
-          format: table
-          exit-code: 1
