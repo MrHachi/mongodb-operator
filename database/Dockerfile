@@ -1,4 +1,4 @@
-FROM mongo:7.0.34-jammy
+FROM mongo:8.3.7
 
 COPY ./mongod.conf /etc/mongod.conf
 COPY ./scripts/bootstrap-rs.js /bootstrap/bootstrap-rs.js
