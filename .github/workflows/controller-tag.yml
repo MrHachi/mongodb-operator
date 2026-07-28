@@ -22,8 +22,8 @@ jobs:
 
           crane auth login ghcr.io -u "${ACTOR}" -p "${GITHUB_TOKEN}"
           crane cp \
-            ghcr.io/${REPOSITORY_OWNER}/mongodb-controller:${COMMIT_HASH} \
-            ghcr.io/${REPOSITORY_OWNER}/mongodb-controller:${VERSION}
+            ghcr.io/${REPOSITORY_OWNER,,}/mongodb-controller:${COMMIT_HASH} \
+            ghcr.io/${REPOSITORY_OWNER,,}/mongodb-controller:${VERSION}
 
           echo "Promoted ${COMMIT_HASH} -> ${VERSION}"
         env:
