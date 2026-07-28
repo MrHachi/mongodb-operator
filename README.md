@@ -66,24 +66,25 @@ flowchart TD
 
 Not triggered on `.md` only PRs.
 
+## On PR merge to main
+
+- Push database and controller images to GHCR
+- Push chart to GHCR and push the tag `chart-*`
+
 ### On tag push
 
-- Tag: `mongodb-v*-r*`
+- Tag: `mongodb-*-*`
     - push DB image to GHCR
-- Tag: `controller-v*`
+- Tag: `controller-*`
     - push controller image to GHCR
-- Tag: `chart-v*`
-    - push chart to GHCR
 
 Not triggered on `.md` only pushes.
 
 ### On release
 
-- Tag: `mongodb-v*-r*`
+- Tag: `mongodb-*-*`
     - retag image built from the tagged commit
-- Tag: `controller-v*`
-    - retag image built from the tagged commit
-- Tag: `chart-v*`
+- Tag: `controller-*`
     - retag image built from the tagged commit
 
 ## Versioning

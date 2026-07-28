@@ -1,19 +1,21 @@
-name: MongoDB Build
+name: MongoDB Push
 
 on:
   pull_request:
     types:
-      - opened
-      - reopened
-      - synchronize
-      - edited
+      - closed
     branches:
       - main
     paths:
       - database/**
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  build:
+  push:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
@@ -28,5 +30,5 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: database
-          tags: mongodb:ci
-          push: false
+          tags: ghcr.io/${{ github.repository_owner }}/mongodb:${{ github.sha }}
+          push: true

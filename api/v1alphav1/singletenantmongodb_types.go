@@ -32,7 +32,7 @@ type SingleTenantMongoDBSpec struct {
 	DatabaseName string `json:"databaseName"`
 	// +kubebuilder:default:=1
 	Replicas int32 `json:"replicas,omitempty"`
-	// +kubebuilder:default:="ghcr.io/mrhachi/mongodb:stable"
+	// +kubebuilder:default:="ghcr.io/mrhachi/mongodb:8.3.7-stable"
 	ImageTag        string            `json:"imageTag,omitempty"`
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 

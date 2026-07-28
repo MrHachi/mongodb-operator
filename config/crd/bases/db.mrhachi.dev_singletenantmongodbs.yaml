@@ -70,7 +70,7 @@ spec:
                   image
                 type: string
               imageTag:
-                default: ghcr.io/mrhachi/mongodb:stable
+                default: ghcr.io/mrhachi/mongodb:8.3.7-stable
                 type: string
               replicas:
                 default: 1

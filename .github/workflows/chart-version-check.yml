@@ -1,0 +1,75 @@
+name: Chart Version Check
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+    branches:
+      - main
+    paths:
+      - charts/**
+
+jobs:
+  check:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+          persist-credentials: false
+
+      - name: Clone head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.head_ref }}
+          path: head
+          persist-credentials: false
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4
+
+      - name: Get chart version
+        id: get-base
+        working-directory: base
+        run: |
+          VERSION=$(yq -r '.version' charts/mongodb-operator/Chart.yaml)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Base version: $VERSION"
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4
+
+      - name: Get chart version
+        id: get-head
+        working-directory: head
+        run: |
+          VERSION=$(yq -r '.version' charts/mongodb-operator/Chart.yaml)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Head version: $VERSION"
+
+      - name: Verify chart version was bumped
+        env:
+          BASE_VERSION: ${{ steps.get-base.outputs.version }}
+          HEAD_VERSION: ${{ steps.get-head.outputs.version }}
+        run: |
+          echo "Base: $BASE_VERSION"
+          echo "Head: $HEAD_VERSION"
+
+          if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
+            echo "Chart version was not changed"
+            exit 1
+          fi
+
+          if dpkg --compare-versions "$HEAD_VERSION" gt "$BASE_VERSION"; then
+            echo "Chart version was upgraded"
+          else
+            echo "Chart version must be greater than base version"
+            exit 1
+          fi

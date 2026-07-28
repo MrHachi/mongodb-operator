@@ -1,0 +1,76 @@
+name: Chart Push
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+    paths:
+      - charts/**
+
+jobs:
+  push:
+    if: github.event.pull_request.merged == true
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    outputs:
+      chart-version: ${{ steps.get-version.outputs.chart-version }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install the latest version of Helm
+        uses: azure/setup-helm@v5
+
+      - name: Verify Helm installation
+        run: helm version
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4
+
+      - name: Get chart version
+        id: get-version
+        run: |
+          VERSION=$(yq -r '.version' charts/mongodb-operator/Chart.yaml)
+          echo "chart-version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Chart version: $VERSION"
+
+      - name: Package chart
+        run: helm package charts/mongodb-operator
+
+      - name: Login to GHCR
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push chart
+        env:
+          CHART_VERSION: "${{ steps.get-version.outputs.chart-version }}"
+        run: |
+          helm push mongodb-operator-${CHART_VERSION}.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/charts
+
+  tag:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs:
+      - push
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Tag commit
+        env:
+          TAG: chart-${{ needs.push.outputs.chart-version }}
+        run: git tag ${TAG} && git push origin ${TAG}

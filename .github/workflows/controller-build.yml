@@ -1,4 +1,4 @@
-name: MongoDB Build
+name: Controller Build
 
 on:
   pull_request:
@@ -9,8 +9,10 @@ on:
       - edited
     branches:
       - main
-    paths:
+    paths-ignore:
+      - "**/*.md"
       - database/**
+      - charts/**
 
 jobs:
   build:
@@ -27,6 +29,6 @@ jobs:
       - name: Build
         uses: docker/build-push-action@v7
         with:
-          context: database
-          tags: mongodb:ci
+          context: .
+          tags: mongodb-controller:ci
           push: false

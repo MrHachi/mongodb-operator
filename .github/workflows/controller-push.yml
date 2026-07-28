@@ -1,19 +1,23 @@
-name: MongoDB Build
+name: Controller Push
 
 on:
   pull_request:
     types:
-      - opened
-      - reopened
-      - synchronize
-      - edited
+      - closed
     branches:
       - main
-    paths:
+    paths-ignore:
+      - "**/*.md"
       - database/**
+      - charts/**
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  build:
+  push:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +31,6 @@ jobs:
       - name: Build
         uses: docker/build-push-action@v7
         with:
-          context: database
-          tags: mongodb:ci
-          push: false
+          context: .
+          tags: ghcr.io/${{ github.repository_owner }}/mongodb-controller:${{ github.sha }}
+          push: true
