@@ -1,0 +1,33 @@
+name: Chart Lint
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+    branches:
+      - main
+    paths:
+      - charts/**
+
+jobs:
+  lint:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install the latest version of Helm
+        uses: azure/setup-helm@v5
+
+      - name: Verify Helm installation
+        run: helm version
+
+      - name: Lint mongodb-operator chart
+        run: make chart-lint

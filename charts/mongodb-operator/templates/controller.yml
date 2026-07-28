@@ -3,7 +3,6 @@ kind: Service
 metadata:
   labels:
     {{- include "mongodb-controller.labels" . | nindent 4 }}
-    control-plane: stmdb-manager
   name: {{ include "mongodb-controller.fullname" . }}-metrics-service
   namespace: {{ .Release.Namespace }}
 spec:
@@ -14,14 +13,12 @@ spec:
     targetPort: 8443
   selector:
     {{- include "mongodb-controller.selectorLabels" . | nindent 4 }}
-    control-plane: stmdb-manager
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
     {{- include "mongodb-controller.labels" . | nindent 4 }}
-    control-plane: stmdb-manager
   name: {{ include "mongodb-controller.fullname" . }}
   namespace: {{ .Release.Namespace }}
 spec:
@@ -29,14 +26,12 @@ spec:
   selector:
     matchLabels:
       {{- include "mongodb-controller.selectorLabels" . | nindent 6 }}
-      control-plane: stmdb-manager
   template:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
       labels:
         {{- include "mongodb-controller.selectorLabels" . | nindent 8 }}
-        control-plane: stmdb-manager
     spec:
       containers:
       - args:

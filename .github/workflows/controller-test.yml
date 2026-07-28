@@ -1,4 +1,4 @@
-name: Tests
+name: Controller Tests
 
 on:
   pull_request:
@@ -11,12 +11,13 @@ on:
       - main
     paths-ignore:
       - "**/*.md"
+      - database/**
+      - charts/**
 
 jobs:
   test:
     permissions:
       contents: read
-    name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code

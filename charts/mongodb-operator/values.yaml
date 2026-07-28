@@ -2,8 +2,8 @@
 replicas: 1
 
 image:
-  repository: stmdb-controller
-  tag: dev
+  repository: ghcr.io/mrhachi/mongodb-controller
+  tag: stable
   pullPolicy: IfNotPresent
 
 # resource requests and limits

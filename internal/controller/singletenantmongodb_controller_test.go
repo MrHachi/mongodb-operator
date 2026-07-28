@@ -28,7 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	mrhachidevv1alphav1 "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
+	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 )
 
 var _ = Describe("SingleTenantMongoDB Controller", func() {

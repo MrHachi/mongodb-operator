@@ -36,8 +36,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	mrhachidevv1alphav1 "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
-	"github.com/mrhachi/single-tenant-mongo-db/internal/controller"
+	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
+	"github.com/mrhachi/mongodb-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

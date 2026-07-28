@@ -39,9 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	api "github.com/mrhachi/single-tenant-mongo-db/api/v1alphav1"
-	"github.com/mrhachi/single-tenant-mongo-db/internal/mongo"
-	"github.com/mrhachi/single-tenant-mongo-db/internal/resources"
+	api "github.com/mrhachi/mongodb-operator/api/v1alphav1"
+	"github.com/mrhachi/mongodb-operator/internal/mongo"
+	"github.com/mrhachi/mongodb-operator/internal/resources"
 )
 
 // SingleTenantMongoDBReconciler reconciles a SingleTenantMongoDB object
@@ -229,6 +229,11 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	stmdb.Status.Phase = "Ready"
 	stmdb.Status.ReadyReplicas = int32(len(pods))
+
+	recLog.Info(
+		"single-tenant MongoDB deployment ready",
+		"name", stmdb.Name,
+	)
 
 	if err := r.Status().Update(ctx, stmdb); err != nil {
 		return ctrl.Result{}, err

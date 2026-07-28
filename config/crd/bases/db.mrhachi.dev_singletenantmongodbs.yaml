@@ -65,6 +65,13 @@ spec:
                 type: object
               databaseName:
                 type: string
+              imagePullPolicy:
+                description: PullPolicy describes a policy for if/when to pull a container
+                  image
+                type: string
+              imageTag:
+                default: ghcr.io/mrhachi/mongodb:8.3.7-stable
+                type: string
               replicas:
                 default: 1
                 format: int32

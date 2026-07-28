@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: singletenantmongodb-sample
 spec:
-  databaseName: notes
+  databaseName: sample
   replicas: 3
 
   admin:
@@ -20,14 +20,14 @@ spec:
         name: singletenantmongodb-sample-app-user-pass
       roles:
         - role: readWrite
-          database: notes
+          database: sample
 
     - username: operation
       secretRef:
         name: singletenantmongodb-sample-operation-user-pass
       roles:
         - role: read
-          database: notes
+          database: sample
 
   storage:
     size: "2Gi"
