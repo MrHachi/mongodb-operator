@@ -28,7 +28,10 @@ jobs:
 
       - name: Build
         uses: docker/build-push-action@v7
+        env:
+          COMMIT_HASH: "${{ github.sha }}"
+          GITHUB_REPOSITORY_OWNER: "${{ github.repository_owner }}"
         with:
           context: database
-          tags: ghcr.io/${{ github.repository_owner }}/mongodb:${{ github.sha }}
+          tags: ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mongodb:${COMMIT_HASH}
           push: true
