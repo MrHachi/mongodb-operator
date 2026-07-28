@@ -23,15 +23,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Repository owner name to lowercase
+        id: preprocessing
+        env:
+          GITHUB_REPOSITORY_OWNER: "${{ github.repository_owner }}"
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+          echo "Repository owner (lowercase): ${GITHUB_REPOSITORY_OWNER,,}"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Build
         uses: docker/build-push-action@v7
-        env:
-          COMMIT_HASH: "${{ github.sha }}"
-          GITHUB_REPOSITORY_OWNER: "${{ github.repository_owner }}"
         with:
           context: database
-          tags: ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mongodb:${COMMIT_HASH}
+          tags: ghcr.io/${{ steps.preprocessing.outputs.owner }}/mongodb:${{ github.sha }}
           push: true
