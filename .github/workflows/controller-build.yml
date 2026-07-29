@@ -23,9 +23,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install QEMU binaries
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -33,5 +30,6 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           tags: mongodb-controller:ci
           push: false
