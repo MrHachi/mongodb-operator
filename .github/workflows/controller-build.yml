@@ -33,5 +33,6 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           tags: mongodb-controller:ci
           push: false
