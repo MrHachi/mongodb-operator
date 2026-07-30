@@ -3,7 +3,6 @@ replicas: 1
 
 image:
   repository: ghcr.io/mrhachi/mongodb-controller
-  tag: stable
   pullPolicy: IfNotPresent
 
 # resource requests and limits
