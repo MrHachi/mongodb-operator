@@ -1,24 +1,65 @@
 # Architecture
 
 ```text
-CRD
-↓
-Controller
-↓
-StatefulSet
-↓
-Pods
-↓
-MongoDB Replica Set
+           SingleTenantMongoDB CR
+                     |
+                     v
+              MongoDB Operator
+                     |
+    +----------------+----------------+
+    |                |                |
+    v                v                v
+StatefulSet       Secrets         ConfigMap
+    |
+    v
+MongoDB Pods
+    |
+    v
+Replica Set
 ```
 
-- Controller deployment exists in `controller-system` namespace (Kubebuilder default)
-- CRDs deployed throughout cluster
+- Controller deployment exists in user-defined namespace
+- CRDs are installed cluster-wide. Custom Resources may exist in namespaces managed by the operator.
     - Controller manages:
         - STS
         - Svc (headless)
         - CM (connection information for applications)
         - Secret (MongoDB keyfile)
+
+## Reconciliation flow
+
+```mermaid
+
+flowchart TD
+    subgraph C[DB Bootstrap]
+        CA[Get pod ordinal zero]
+        CB[Initiate RS via pod exec]
+        CC[Create admin via pod exec]
+
+        CA -- not found, retry --> CA
+        CA -- found --> CB
+        CB --> CC
+    end
+
+    subgraph D[DB state reconciliation]
+        DA[Reconcile RS topology]
+        DB[Reconcile app users]
+
+        DA --> DB
+    end
+
+    A{s}
+    B[Kubernetes resource reconciliation]
+
+    E[DB user secret reconciliation]
+
+    A --> B
+    B -- database not initialized --> C
+    B -- database initialized --> D
+    C --> D
+    D --> E
+
+```
 
 ## Evolution
 
@@ -44,3 +85,11 @@ flowchart TD
 - Horizontal autoscaling
     - TODO: Investigate autoscaling strategies while considering MongoDB replica set membership changes and stateful workload constraints
 - Keyfile rotation
+
+## Current limitations
+
+- Only supports a single application database per MongoDB deployment
+- Does not currently implement finalizers for external cleanup
+- Does not currently support MongoDB version upgrades
+- Does not currently support automated keyfile rotation
+- Does not currently expose Prometheus metrics for database health
