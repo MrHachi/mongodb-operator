@@ -228,7 +228,7 @@ var _ = Describe("Operator", Ordered, func() {
 	Context("Chart", func() {
 		BeforeAll(func() {
 			By("installing the Helm chart")
-			cmd := exec.Command("make", "chart-install", fmt.Sprintf("HELM=helm -n %s --set image.tag=stable", namespace))
+			cmd := exec.Command("make", "chart-install", fmt.Sprintf("HELM=helm -n %s", namespace))
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to install Helm chart")
 		})
