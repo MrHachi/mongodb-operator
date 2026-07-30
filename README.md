@@ -1,97 +1,159 @@
 # SingleTenantMongoDB Controller
 
-A simple Kubernetes Controller for managing single-tenant MongoDB replica sets.
+A simple Kubernetes Operator for managing single-tenant MongoDB replica sets.
 
-It automates deployment, replica set initialization, topology reconciliation, and application user management so that applications can consume MongoDB through a simple Custom Resource rather than manually managing StatefulSets and replica set administration.
+It allows applications to consume MongoDB through a declarative Custom Resource rather than manually managing StatefulSets, Secrets, and replica set administration.
 
-## Features
+## Getting started
 
-- Deploys MongoDB StatefulSets
-- Manages replica set topology
-- Bootstraps MongoDB automatically (in container image)
-- Reconciles application users
-- Rotates passwords
-- Generates MongoDB keyfile secrets
-- Publishes connection information
+1. Install Helm chart (controller and CRD)
 
-## Reconciliation
+    ```bash
+    helm install mongodb-operator oci://ghcr.io/mrhachi/charts/mongodb-operator --namespace mongodb-system
+    ```
 
-```mermaid
+2. Deploy user secrets
 
-flowchart TD
-    subgraph C[DB Bootstrap]
-        CA[Get pod ordinal zero]
-        CB[Initiate RS via pod exec]
-        CC[Create admin via pod exec]
+    ```bash
+    kubectl -n sample-app create secret generic singletenantmongodb-sample-admin-pass \
+        --from-literal=password=Ar34l5ecureP@ssw0rd?
+    kubectl -n sample-app create secret generic singletenantmongodb-sample-app-user-pass \
+        --from-literal=password=An0th3r1.
+    kubectl -n sample-app create secret generic singletenantmongodb-sample-operation-user-pass \
+        --from-literal=password=4N0THER0N3.
+    ```
 
-        CA -- not found, retry --> CA
-        CA -- found --> CB
-        CB --> CC
-    end
+3. Install MongoDB custom resource
 
-    subgraph D[DB state reconciliation]
-        DA[Reconcile RS topology]
-        DB[Reconcile app users]
+    ```bash
+    kubectl -n sample-app apply -f singletenantmongodb.yml
+    ```
 
-        DA --> DB
-    end
+    singletenantmongodb.yml
+    ```yml
+    apiVersion: db.mrhachi.dev/v1alphav1
+    kind: SingleTenantMongoDB
+    metadata:
+      labels:
+        app.kubernetes.io/name: controller
+        app.kubernetes.io/managed-by: kustomize
+      name: singletenantmongodb-sample
+    spec:
+      databaseName: sample
+      replicas: 2
+    
+      admin:
+        username: admin
+        secretRef:
+          name: singletenantmongodb-sample-admin-pass
+    
+      users:
+        - username: app
+          secretRef:
+            name: singletenantmongodb-sample-app-user-pass
+          roles:
+            - role: readWrite
+              database: sample
+    
+        - username: operation
+          secretRef:
+            name: singletenantmongodb-sample-operation-user-pass
+          roles:
+            - role: read
+              database: sample
+    
+      storage:
+        size: "2Gi"
+    
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "512Mi"
+    
+    ```
 
-    A{s}
-    B[Kubernetes resource reconciliation]
+## SingleTenantMongoDB Custom Resource API
 
-    E[DB user secret reconciliation]
+Represents a single MongoDB replica set managed by the operator.
 
-    A --> B
-    B -- database not initialized --> C
-    B -- database initialized --> D
-    C --> D
-    D --> E
+Creating a `SingleTenantMongoDB` causes the operator to create and reconcile the following:
 
-```
+- MongoDB StatefulSets
+- MongoDB Services
+- Connection information ConfigMap
+- Replica set topology
+- Application user roles and passwords
+- MongoDB replica set keyfile secrets
 
-## CI/CD workflows
+### spec.databaseName
 
-### On PR to main
+The default MongoDB database used.
 
-- Run lint check
-- Execute unit tests
-- Execute e2e tests
-- Check CRD version
-- Check controller version
-    - must have been raised if code has been touched
-    - new version MUST result in chart version
-- Check chart version
-    - must have been raised if templates have been touched
-    - `appVersion` MUST match controller version
+### spec.replicas
 
-Not triggered on `.md` only PRs.
+Number of MongoDB replica set members.
 
-## On PR merge to main
+### spec.admin
 
-- Push database and controller images to GHCR
-- Push chart to GHCR and push the tag `chart-*`
+Defines the MongoDB administrator account.
 
-### On tag push
+#### username
 
-- Tag: `mongodb-*-*`
-    - push DB image to GHCR
-- Tag: `controller-*`
-    - push controller image to GHCR
+MongoDB administrator username
 
-Not triggered on `.md` only pushes.
+#### secretRef.name
 
-### On release
+Kubernetes Secret containing the administrator password
 
-- Tag: `mongodb-*-*`
-    - retag image built from the tagged commit
-- Tag: `controller-*`
-    - retag image built from the tagged commit
+The referenced Secret must contain the secret under the `password` key.
 
-## Versioning
+### spec.users
 
-Chart version follows SemVer.
+Defines MongoDB application users managed by the operator.
 
-appVersion matches the controller version.
+#### [].username
 
-MongoDB image version follows
-<upstream-version>-r<revision>.
+MongoDB administrator username
+
+#### [].secretRef.name
+
+Kubernetes Secret containing the administrator password
+
+The referenced Secret must contain the secret under the `password` key.
+
+#### [].roles
+
+**[].role**: MongoDB user role
+**[].database**: Database against which the role applies
+
+### spec.storage
+
+Defines persistent storage allocated to each MongoDB replica.
+
+Example:
+
+```yaml
+storage:
+  size: "10Gi"
+  ```
+  
+The value is applied to the StatefulSet volume claims.
+
+### spec.resources
+
+Defines Kubernetes resource requests and limits for MongoDB containers.
+
+## Managed resources
+
+A `SingleTenantMongoDB` resource creates:
+
+- StatefulSet
+- Headless Service
+- PersistentVolumeClaims
+- Connection ConfigMap
+- MongoDB authentication Secrets
+
+Resources are owned by the Custom Resource and are garbage collected when the resource is deleted.
