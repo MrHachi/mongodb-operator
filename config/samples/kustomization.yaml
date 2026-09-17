@@ -1,4 +1,5 @@
 ## Append samples of your project ##
 resources:
 - db_v1alphav1_singletenantmongodb.yaml
+- db_v1alphav2_mongodb.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

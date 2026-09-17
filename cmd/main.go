@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
+	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
 	"github.com/mrhachi/mongodb-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -50,6 +51,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(mrhachidevv1alphav1.AddToScheme(scheme))
+	utilruntime.Must(dbv1alphav2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -188,6 +190,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "singletenantmongodb")
+		os.Exit(1)
+	}
+	if err := (&controller.MongoDBReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "mongodb")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

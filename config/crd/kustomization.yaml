@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/db.mrhachi.dev_singletenantmongodbs.yaml
+- bases/db.mrhachi.dev_mongodbs.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

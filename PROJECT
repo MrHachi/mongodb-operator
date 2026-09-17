@@ -18,4 +18,13 @@ resources:
   kind: SingleTenantMongoDB
   path: github.com/mrhachi/mongodb-operator/api/v1alphav1
   version: v1alphav1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: mrhachi.dev
+  group: db
+  kind: MongoDB
+  path: github.com/mrhachi/mongodb-operator/api/v1alphav2
+  version: v1alphav2
 version: "3"
