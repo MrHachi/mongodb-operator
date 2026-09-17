@@ -33,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -47,7 +46,6 @@ import (
 // SingleTenantMongoDBReconciler reconciles a SingleTenantMongoDB object
 type SingleTenantMongoDBReconciler struct {
 	client.Client
-	*rest.Config
 	Scheme *runtime.Scheme
 }
 

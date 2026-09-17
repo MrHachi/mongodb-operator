@@ -186,7 +186,6 @@ func main() {
 
 	if err := (&controller.SingleTenantMongoDBReconciler{
 		Client: mgr.GetClient(),
-		Config: mgr.GetConfig(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "singletenantmongodb")
