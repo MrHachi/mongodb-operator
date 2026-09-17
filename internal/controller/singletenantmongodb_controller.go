@@ -75,6 +75,7 @@ type SingleTenantMongoDBReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
 func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	recLog := logf.FromContext(ctx)
+	recLog.Info("the v1alphav1 singletenantmongodb API is deprecated-consider migrating to the mongodb API available in v1alphav2 and on")
 
 	stmdb := &api.SingleTenantMongoDB{}
 	if err := r.Get(ctx, req.NamespacedName, stmdb); err != nil {
@@ -82,21 +83,23 @@ func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	// Reconciliation loop
-	sts, err := r.reconcileStatefulSet(ctx, stmdb)
+	kr := resources.NewLegacy(stmdb)
+
+	sts, err := r.reconcileStatefulSet(ctx, kr)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconcile stateful set: %w", err)
 	}
 
-	svc, err := r.reconcileService(ctx, stmdb)
+	svc, err := r.reconcileService(ctx, kr)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconcile service: %w", err)
 	}
 
-	if _, err := r.reconcileConfigMap(ctx, stmdb); err != nil {
+	if _, err := r.reconcileConfigMap(ctx, kr); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconcile config map: %w", err)
 	}
 
-	if err := r.ensureKeyfileSecret(ctx, stmdb); err != nil {
+	if err := r.ensureKeyfileSecret(ctx, kr); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure keyfile: %w", err)
 	}
 
@@ -302,22 +305,22 @@ func (r *SingleTenantMongoDBReconciler) GetPods(ctx context.Context, sts *appsv1
 
 func (r *SingleTenantMongoDBReconciler) reconcileStatefulSet(
 	ctx context.Context,
-	desired *api.SingleTenantMongoDB,
+	legacy *resources.Legacy,
 ) (*appsv1.StatefulSet, error) {
-	dSts := resources.MakeDesiredSts(desired)
+	dSts := legacy.MakeDesiredSts()
 	aSts := &appsv1.StatefulSet{}
 	if err := r.Get(
 		ctx,
 		types.NamespacedName{
-			Namespace: desired.Namespace,
-			Name:      desired.Name,
+			Namespace: legacy.Namespace,
+			Name:      legacy.Name,
 		},
 		aSts,
 	); err != nil {
 		switch {
 		case apierrors.IsNotFound(err):
 			if err := controllerutil.SetControllerReference(
-				desired,
+				legacy.SingleTenantMongoDB,
 				dSts,
 				r.Scheme,
 			); err != nil {
@@ -359,22 +362,22 @@ func (r *SingleTenantMongoDBReconciler) reconcileStatefulSet(
 
 func (r *SingleTenantMongoDBReconciler) reconcileService(
 	ctx context.Context,
-	desired *api.SingleTenantMongoDB,
+	legacy *resources.Legacy,
 ) (*corev1.Service, error) {
-	dSvc := resources.MakeDesiredSvc(desired)
+	dSvc := legacy.MakeDesiredSvc()
 	aSvc := &corev1.Service{}
 	if err := r.Get(
 		ctx,
 		types.NamespacedName{
-			Namespace: desired.Namespace,
-			Name:      desired.Name,
+			Namespace: legacy.Namespace,
+			Name:      legacy.Name,
 		},
 		aSvc,
 	); err != nil {
 		switch {
 		case apierrors.IsNotFound(err):
 			if err := controllerutil.SetControllerReference(
-				desired,
+				legacy.SingleTenantMongoDB,
 				dSvc,
 				r.Scheme,
 			); err != nil {
@@ -415,16 +418,16 @@ func (r *SingleTenantMongoDBReconciler) reconcileService(
 
 func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 	ctx context.Context,
-	desired *api.SingleTenantMongoDB,
+	legacy *resources.Legacy,
 ) (*corev1.ConfigMap, error) {
-	cmName := fmt.Sprintf("%s-connection", desired.Name)
+	cmName := fmt.Sprintf("%s-connection", legacy.Name)
 
-	dCm := resources.MakeDesiredCm(desired)
+	dCm := legacy.MakeDesiredCm()
 	aCm := &corev1.ConfigMap{}
 	if err := r.Get(
 		ctx,
 		types.NamespacedName{
-			Namespace: desired.Namespace,
+			Namespace: legacy.Namespace,
 			Name:      cmName,
 		},
 		aCm,
@@ -432,7 +435,7 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 		switch {
 		case apierrors.IsNotFound(err):
 			if err := controllerutil.SetControllerReference(
-				desired,
+				legacy.SingleTenantMongoDB,
 				dCm,
 				r.Scheme,
 			); err != nil {
@@ -473,15 +476,15 @@ func (r *SingleTenantMongoDBReconciler) reconcileConfigMap(
 // We control the keyfile data
 func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 	ctx context.Context,
-	desired *api.SingleTenantMongoDB,
+	legacy *resources.Legacy,
 ) error {
-	secretName := fmt.Sprintf("%s-kf", desired.Name)
+	secretName := fmt.Sprintf("%s-kf", legacy.Name)
 
 	aSecret := &corev1.Secret{}
 	if err := r.Get(
 		ctx,
 		types.NamespacedName{
-			Namespace: desired.Namespace,
+			Namespace: legacy.Namespace,
 			Name:      secretName,
 		},
 		aSecret,
@@ -492,13 +495,13 @@ func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 			if err != nil {
 				return fmt.Errorf("generate keyfile data: %w", err)
 			}
-			kfSecret := resources.MakeDesiredKeyfileSecret(desired,
+			kfSecret := legacy.MakeDesiredKeyfileSecret(
 				map[string]string{
 					"keyfile": kfData,
 				},
 			)
 			if err := controllerutil.SetControllerReference(
-				desired,
+				legacy.SingleTenantMongoDB,
 				kfSecret,
 				r.Scheme,
 			); err != nil {
