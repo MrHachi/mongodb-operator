@@ -49,6 +49,13 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 20
         name: manager
+        env:
+        - name: CONTROLLER_NAME
+          value: {{ include "mongodb-controller.name" . }}
+        - name: SA_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         ports:
         - containerPort: 8081
           name: health

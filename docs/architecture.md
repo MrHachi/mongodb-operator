@@ -48,13 +48,15 @@ flowchart LR
 
 flowchart TD
     EnsureKeyfileSecret["Ensure keyfile secret"]
+    EnsureRBAC["Ensure RBAC"]
     EnsureFirstPod["Ensure primary pod"]
     EnsureService["Ensure headless service"]
     InitRS["Initiate replica set<br>(pod exec)"]
     InitAdmin["Create admin user<br>(pod exec)"]
     InitDone["Ready"]
 
-    EnsureKeyfileSecret --> EnsureFirstPod
+    EnsureKeyfileSecret --> EnsureRBAC
+    EnsureRBAC --> EnsureFirstPod
     EnsureFirstPod --> EnsureService
     EnsureService --> InitRS
     InitRS --> InitAdmin

@@ -31,6 +31,8 @@ type MongoDBSpec struct {
 	// +kubebuilder:default:=1
 	Replicas int32 `json:"replicas,omitempty"`
 	// +kubebuilder:default={}
+	ReplicaSet ReplicaSetSpec `json:"replicaSet,omitempty"`
+	// +kubebuilder:default={}
 	Scaling ScalingSpec `json:"scaling,omitempty"`
 	// +kubebuilder:default:={}
 	Image ImageSpec `json:"image,omitempty"`
@@ -42,10 +44,16 @@ type MongoDBSpec struct {
 	Users []MongoDBUserSpec `json:"users,omitempty"`
 
 	// +kubebuilder:default:={}
-	Storage MongoDBStorageSpec `json:"storage"`
+	Storage MongoDBStorageSpec `json:"storage,omitempty"`
 
 	// +optional
-	Resources ResourcesSpec `json:"resources"`
+	Resources ResourcesSpec `json:"resources,omitempty"`
+}
+
+// ReplicaSetSpec defines replica set properties
+type ReplicaSetSpec struct {
+	// +kubebuilder:default:="rs0"
+	Name string `json:"name,omitempty"`
 }
 
 // ScalingSpec defines scaling behavior
@@ -56,7 +64,7 @@ type ScalingSpec struct {
 
 // ImageSpec defines the image to be used for MongoDB
 type ImageSpec struct {
-	// +kubebuilder:default:="ghcr.io/mrhachi/mongodb:8.3.7-stable"
+	// +kubebuilder:default:="mongo:latest"
 	Tag string `json:"imageTag,omitempty"`
 	// +optional
 	PullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
@@ -86,8 +94,12 @@ type MongoDBRoleSpec struct {
 
 // MongoDBStorageSpec describes the storage to provision for MongoDB
 type MongoDBStorageSpec struct {
-	// +kubebuilder:default:="20Gi"
-	Size string `json:"size"`
+	// +kubebuilder:default:="10Gi"
+	Size string `json:"size,omitempty"`
+	// Parsed with stdlib time.ParseDuration().
+	// Set to 0 to immediately delete PVC on scale-in, and -1 for infinite retention.
+	// +kubebuilder:default:="168h"
+	RetentionPeriod string `json:"retentionPeriod,omitempty"`
 }
 
 type ResourcesSpec struct {

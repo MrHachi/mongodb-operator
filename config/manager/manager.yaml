@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: controller-manager
+  name: mongodb-controller
   namespace: system
   labels:
-    control-plane: controller-manager
+    control-plane: mongodb-controller
     app.kubernetes.io/name: controller
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
     matchLabels:
-      control-plane: controller-manager
+      control-plane: mongodb-controller
       app.kubernetes.io/name: controller
   replicas: 1
   template:
     metadata:
       annotations:
-        kubectl.kubernetes.io/default-container: manager
+        kubectl.kubernetes.io/default-container: controller
       labels:
-        control-plane: controller-manager
+        control-plane: mongodb-controller
         app.kubernetes.io/name: controller
     spec:
       # TODO(user): Uncomment the following code to configure the nodeAffinity expression
@@ -49,45 +49,50 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - command:
-        - /manager
-        args:
-          - --leader-elect
-          - --health-probe-bind-address=:8081
-        image: controller:latest
-        name: manager
-        ports:
-        - containerPort: 8081
-          name: health
-          protocol: TCP
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - "ALL"
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8081
-          initialDelaySeconds: 15
-          periodSeconds: 20
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8081
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        # TODO(user): Configure the resources accordingly based on the project requirements.
-        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-        resources:
-          limits:
-            cpu: 500m
-            memory: 128Mi
-          requests:
-            cpu: 10m
-            memory: 64Mi
-        volumeMounts: []
+        - command:
+            - /controller
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+          image: controller:latest
+          name: controller
+          ports:
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: SA_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          # TODO(user): Configure the resources accordingly based on the project requirements.
+          # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          volumeMounts: []
       volumes: []
-      serviceAccountName: controller-manager
+      serviceAccountName: mongodb-controller
       terminationGracePeriodSeconds: 10

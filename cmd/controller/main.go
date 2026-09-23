@@ -39,7 +39,7 @@ import (
 	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
 	"github.com/mrhachi/mongodb-operator/internal/controller"
-	"github.com/mrhachi/mongodb-operator/internal/utils/exec"
+	"github.com/mrhachi/mongodb-operator/internal/controller/utils/exec"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -212,9 +212,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("Starting manager")
+	setupLog.Info("Starting controller")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "Failed to run manager")
+		setupLog.Error(err, "Failed to run controller")
 		os.Exit(1)
 	}
 }

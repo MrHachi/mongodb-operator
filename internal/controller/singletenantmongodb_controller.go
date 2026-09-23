@@ -37,9 +37,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	api "github.com/mrhachi/mongodb-operator/api/v1alphav1"
-	"github.com/mrhachi/mongodb-operator/internal/mongo"
-	"github.com/mrhachi/mongodb-operator/internal/resources"
-	"github.com/mrhachi/mongodb-operator/internal/utils/secrets"
+	"github.com/mrhachi/mongodb-operator/internal/controller/mongo"
+	"github.com/mrhachi/mongodb-operator/internal/controller/resources"
+	"github.com/mrhachi/mongodb-operator/internal/controller/utils/secrets"
 )
 
 // SingleTenantMongoDBReconciler reconciles a SingleTenantMongoDB object
@@ -62,7 +62,7 @@ type SingleTenantMongoDBReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Apps
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets/status,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
