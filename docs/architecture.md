@@ -23,38 +23,108 @@ Replica Set
         - CM (connection information for applications)
         - Secret (MongoDB keyfile)
 
-## Reconciliation flow
+## Reconciliation flows
+
+```mermaid
+
+flowchart LR
+    Init[Initialization]
+    Scaling[Scaling]
+    Ready[Ready]
+    Degraded[Degraded]
+
+    Init -->|desiredCount > 1| Scaling
+    Init -->|desiredCount == 1| Ready
+    Ready --> |desiredCount changes| Scaling
+    Scaling --> Ready
+    Ready --> |unhealthy| Degraded
+    Degraded --> Ready
+
+```
+
+### Initialization phase
 
 ```mermaid
 
 flowchart TD
-    subgraph C[DB Bootstrap]
-        CA[Get pod ordinal zero]
-        CB[Initiate RS via pod exec]
-        CC[Create admin via pod exec]
+    EnsureKeyfileSecret["Ensure keyfile secret"]
+    EnsureFirstPod["Ensure primary pod"]
+    EnsureService["Ensure headless service"]
+    InitRS["Initiate replica set<br>(pod exec)"]
+    InitAdmin["Create admin user<br>(pod exec)"]
+    InitDone["Ready"]
 
-        CA -- not found, retry --> CA
-        CA -- found --> CB
-        CB --> CC
+    EnsureKeyfileSecret --> EnsureFirstPod
+    EnsureFirstPod --> EnsureService
+    EnsureService --> InitRS
+    InitRS --> InitAdmin
+    InitAdmin --> InitDone
+```
+
+### Scaling phase
+
+```mermaid
+
+flowchart TD
+    subgraph ScaleOut[Scale-out]
+        direction TD;
+        ReclaimPVC["Find jettisoned PVCs"]
+        ReuseSuffices["Reuse past suffices"]
+        NewSuffices["Make new suffices"]
+        AddPods["Add member pods"]
+
+        ReclaimPVC -->|"found"| ReuseSuffices
+        ReclaimPVC -->|"none remain"| NewSuffices
+        ReuseSuffices --> AddPods
+        NewSuffices --> AddPods
     end
 
-    subgraph D[DB state reconciliation]
-        DA[Reconcile RS topology]
-        DB[Reconcile app users]
+    subgraph ScaleIn[Scale-in]
+        direction TD;
+        FilterTargets["Find Secondary replicas"]
+        GateScaleIn["Wait for sufficient viable targets"]
+        SelectTargets["Select targets with least replication lag"]
+        RemovePods["Remove selected member pods"]
 
-        DA --> DB
+        FilterTargets --> GateScaleIn
+        GateScaleIn --> SelectTargets
+        SelectTargets --> RemovePods
     end
+    ScaleDone["Ready"]
 
-    A{s}
-    B[Kubernetes resource reconciliation]
+    AddPods -->|"status: Primary/Secondary"| ScaleDone
+    RemovePods --> ScaleDone
+```
 
-    E[DB user secret reconciliation]
+### Ready phase
 
-    A --> B
-    B -- database not initialized --> C
-    B -- database initialized --> D
-    C --> D
-    D --> E
+```mermaid
+
+flowchart TD
+    EnsurePods["Ensure pods"]
+    ValidateHealth["Check RS status"]
+    CleanupPVC["Delete expired PVCs"]
+    Done["Ready"]
+
+    EnsurePods --> ValidateHealth
+    ValidateHealth --> CleanupPVC
+    CleanupPVC --> Done
+
+```
+
+### Degraded phase
+
+```mermaid
+
+flowchart TD
+    EnsureMajority["Ensure majority"]
+    EnsurePrimary["Ensure primary health"]
+    EnsureDesiredCount["Ensure desired count"]
+    EnsureMembersHealthy["Ensure members healthy"]
+
+    EnsureMajority --> EnsurePrimary
+    EnsurePrimary --> EnsureDesiredCount
+    EnsureDesiredCount --> EnsureMembersHealthy
 
 ```
 
@@ -63,18 +133,18 @@ flowchart TD
 ```mermaid
 
 flowchart TD
-  A[Kubernetes templates + single-replica manually managed MongoDB STS]
-  B[Kubernetes templates + multiple-replica manually managed MongoDB STS]
-  C[Kubernetes templates + MongoDB RS operator]
-  D[CRD + hand-written MongoDB controller + RS operator]
-  E[CRD + Kubebuilder MongoDB controller + RS operator]
-  F[StatefulSet -> explicit Pod management]
+    A["Kubernetes templates + single-replica manually managed MongoDB STS"]
+    B["Kubernetes templates + multiple-replica manually managed MongoDB STS"]
+    C["Kubernetes templates + MongoDB RS operator"]
+    D["CRD + hand-written MongoDB controller + RS operator"]
+    E["CRD + Kubebuilder MongoDB controller + RS operator"]
+    F["StatefulSet -> explicit Pod management"]
 
-  A -- experimentation -> B
-  B -- operational automation -> C
-  C -- naive abstraction -> D
-  D -- adoption of industry-standard tooling -> E
-  E -- enable topology-aware HA -> F
+    A -->|experimentation| B
+    B -->|operational automation| C
+    C -->|naive abstraction| D
+    D -->|adoption of industry-standard tooling| E
+    E -->|enable topology-aware HA| F
 
 ```
 
