@@ -18,8 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -41,6 +39,7 @@ import (
 	api "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 	"github.com/mrhachi/mongodb-operator/internal/mongo"
 	"github.com/mrhachi/mongodb-operator/internal/resources"
+	"github.com/mrhachi/mongodb-operator/internal/utils/secrets"
 )
 
 // SingleTenantMongoDBReconciler reconciles a SingleTenantMongoDB object
@@ -489,7 +488,7 @@ func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 	); err != nil {
 		switch {
 		case apierrors.IsNotFound(err):
-			kfData, err := generateKeyfileData()
+			kfData, err := secrets.GenerateKeyfileData()
 			if err != nil {
 				return fmt.Errorf("generate keyfile data: %w", err)
 			}
@@ -517,12 +516,4 @@ func (r *SingleTenantMongoDBReconciler) ensureKeyfileSecret(
 		}
 	}
 	return nil
-}
-
-func generateKeyfileData() (string, error) {
-	b := make([]byte, 756)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(b), nil
 }

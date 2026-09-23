@@ -39,6 +39,7 @@ import (
 	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
 	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
 	"github.com/mrhachi/mongodb-operator/internal/controller"
+	"github.com/mrhachi/mongodb-operator/internal/utils/exec"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -183,6 +184,8 @@ func main() {
 		setupLog.Error(err, "Failed to start manager")
 		os.Exit(1)
 	}
+
+	exec.SetClientConfig(mgr.GetConfig())
 
 	if err := (&controller.SingleTenantMongoDBReconciler{
 		Client: mgr.GetClient(),
