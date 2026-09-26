@@ -1,8 +1,9 @@
 # Image URL to use all building/pushing image targets
 IMG ?= mongodb-controller:latest
 DB_IMG ?= mongodb:latest
+IMGR_IMG ?= mongodb-instance-manager:latest
 # Release ID to use with helm
-REL ?= mongodb-operator
+REL ?= mongodb-controller
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -132,18 +133,26 @@ build: manifests generate fmt vet ## Build controller binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/controller/main.go
 
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
+# If you wish to build the controller image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
+docker-build: ## Build docker image with the controller.
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
+docker-push: ## Push docker image with the controller.
 	$(CONTAINER_TOOL) push ${IMG}
 
-# TODO: decide on official image tag
+.PHONY: instance-manager-docker-build
+instance-manager-docker-build:
+	$(CONTAINER_TOOL) build -f imgr.Dockerfile -t ${IMGR_IMG} .
+
+.PHONY: database-docker-push
+instance-manager-docker-push:
+	$(CONTAINER_TOOL) push ${IMGR_IMG}
+
+# Legacy
 .PHONY: database-docker-build
 database-docker-build:
 	$(CONTAINER_TOOL) build -t ${DB_IMG} ./database
