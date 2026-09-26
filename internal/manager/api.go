@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 func (m *MongoManager) Serve(ctx context.Context, addr string) error {
@@ -37,19 +38,15 @@ func (m *MongoManager) Serve(ctx context.Context, addr string) error {
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			m.logger.Error("failed to shut down HTTP server",
-				"error", err,
-			)
+			m.logger.Error("failed to shut down HTTP server", zap.Error(err))
 		}
 
 		if err := m.client.Disconnect(shutdownCtx); err != nil {
-			m.logger.Error("failed to disconnect mongodb client",
-				"error", err,
-			)
+			m.logger.Error("failed to disconnect mongodb client", zap.Error(err))
 		}
 	}()
 
-	m.logger.Info("starting HTTP server", "addr", addr)
+	m.logger.Info("starting HTTP server", zap.String("addr", addr))
 
 	if err := server.ListenAndServe(); err != nil &&
 		!errors.Is(err, http.ErrServerClosed) {
@@ -97,9 +94,7 @@ func (m *MongoManager) HandleInitialize(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 
 	if err := m.EnsureAdminUser(ctx, req.Username, req.Password); err != nil {
-		m.logger.Error("failed to ensure admin user",
-			"error", err,
-		)
+		m.logger.Error("failed to ensure admin user", zap.Error(err))
 		http.Error(w, "failed to ensure admin user", http.StatusInternalServerError)
 		return
 	}
@@ -109,9 +104,7 @@ func (m *MongoManager) HandleInitialize(w http.ResponseWriter, r *http.Request) 
 		m.hostname,
 		m.serviceName,
 	); err != nil {
-		m.logger.Error("failed to ensure replica set",
-			"error", err,
-		)
+		m.logger.Error("failed to ensure replica set", zap.Error(err))
 		http.Error(w, "failed to initialize replica set", http.StatusInternalServerError)
 		return
 	}

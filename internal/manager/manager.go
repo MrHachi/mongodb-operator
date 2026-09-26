@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.uber.org/zap"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,12 +34,12 @@ type MongoManager struct {
 	kube                             *kubernetes.Clientset
 	namespace, hostname, serviceName string
 
-	logger *slog.Logger
+	logger *zap.Logger
 	mu     sync.Mutex
 	client *mongo.Client
 }
 
-func NewMongoManager(ctx context.Context, logger *slog.Logger) (*MongoManager, error) {
+func NewMongoManager(ctx context.Context, logger *zap.Logger) (*MongoManager, error) {
 	// Read hostname via syscall
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -148,9 +148,7 @@ func (m *MongoManager) authorize(
 				metav1.CreateOptions{},
 			)
 		if err != nil {
-			m.logger.Error("token review failed",
-				"error", err,
-			)
+			m.logger.Error("token review failed", zap.Error(err))
 			http.Error(w, "invalid token", http.StatusBadRequest)
 			return
 		}
@@ -181,9 +179,7 @@ func (m *MongoManager) authorize(
 				metav1.CreateOptions{},
 			)
 		if err != nil {
-			m.logger.Error("subject access review failed",
-				"error", err,
-			)
+			m.logger.Error("subject access review failed", zap.Error(err))
 			http.Error(w, "authorization failed", http.StatusInternalServerError)
 			return
 		}
