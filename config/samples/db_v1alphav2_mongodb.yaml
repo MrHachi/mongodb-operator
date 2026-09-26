@@ -6,4 +6,30 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: mongodb-sample
 spec:
-  # TODO(user): Add fields here
+  admin:
+    username: admin
+    secretRef:
+      name: mongodb-admin-secret
+  databaseName: sample_db
+  replicas: 3
+  replicaSet:
+    name: rs0
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  scaling:
+    replicationLagThreshold: 10s
+  storage:
+    size: 2Gi
+    retentionPeriod: 72h
+  users:
+    - username: app_user
+      secretRef:
+        name: mongodb-app-user-secret
+      roles:
+        - database: sample_db
+          role: readWrite
