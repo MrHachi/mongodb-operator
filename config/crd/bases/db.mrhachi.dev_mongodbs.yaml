@@ -16,7 +16,7 @@ spec:
     singular: mongodb
   scope: Namespaced
   versions:
-  - name: v1alphav2
+  - name: v1betav1
     schema:
       openAPIV3Schema:
         description: MongoDB is the Schema for the mongodbs API

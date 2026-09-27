@@ -3,7 +3,7 @@ package resources_test
 import (
 	"testing"
 
-	api "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	api "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	"github.com/mrhachi/mongodb-operator/internal/controller/resources"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

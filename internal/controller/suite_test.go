@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
-	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	dbv1betav1 "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -63,7 +63,7 @@ var _ = BeforeSuite(func() {
 	err = mrhachidevv1alphav1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = dbv1alphav2.AddToScheme(scheme.Scheme)
+	err = dbv1betav1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme

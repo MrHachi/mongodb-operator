@@ -72,7 +72,7 @@ type SingleTenantMongoDBReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
 func (r *SingleTenantMongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	recLog := logf.FromContext(ctx)
-	recLog.Info("the v1alphav1 singletenantmongodb API is deprecated-consider migrating to the mongodb API available in v1alphav2 and on")
+	recLog.Info("the v1alphav1 singletenantmongodb API is deprecated-consider migrating to the mongodb API available in v1betav1 and on")
 
 	stmdb := &api.SingleTenantMongoDB{}
 	if err := r.Get(ctx, req.NamespacedName, stmdb); err != nil {

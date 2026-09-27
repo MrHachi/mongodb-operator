@@ -25,6 +25,6 @@ resources:
   domain: mrhachi.dev
   group: db
   kind: MongoDB
-  path: github.com/mrhachi/mongodb-operator/api/v1alphav2
-  version: v1alphav2
+  path: github.com/mrhachi/mongodb-operator/api/v1betav1
+  version: v1betav1
 version: "3"

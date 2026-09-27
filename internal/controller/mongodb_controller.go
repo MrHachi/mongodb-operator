@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	dbv1betav1 "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	"github.com/mrhachi/mongodb-operator/internal/controller/resources"
 	podutils "github.com/mrhachi/mongodb-operator/internal/controller/utils/pod"
 	imgrclient "github.com/mrhachi/mongodb-operator/internal/manager/client"
@@ -70,7 +70,7 @@ type MongoDBReconciler struct {
 func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 
-	db := &dbv1alphav2.MongoDB{}
+	db := &dbv1betav1.MongoDB{}
 	if err := r.Get(ctx, req.NamespacedName, db); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -90,7 +90,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	switch db.Status.Phase {
 	case "":
-		db.Status.Phase = dbv1alphav2.PhaseInitializing
+		db.Status.Phase = dbv1betav1.PhaseInitializing
 
 		logger.Info(
 			"MongoDB phase unset, will set to initializing",
@@ -102,17 +102,17 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 
 		return ctrl.Result{}, nil
-	case dbv1alphav2.PhaseInitializing:
+	case dbv1betav1.PhaseInitializing:
 		return r.reconcileInitializing(ctx, db)
 
 	// TODO
-	// 	case dbv1alphav2.PhaseScaling:
+	// 	case dbv1betav1.PhaseScaling:
 	// 		return r.reconcileScaling(ctx, desired, actual)
 	//
-	// 	case dbv1alphav2.PhaseReady:
+	// 	case dbv1betav1.PhaseReady:
 	// 		return r.reconcileSteadyState(ctx, desired, actual)
 	//
-	// 	case dbv1alphav2.PhaseDegraded:
+	// 	case dbv1betav1.PhaseDegraded:
 	// 		return r.reconcileDegraded(ctx, desired, actual)
 
 	default:
@@ -123,7 +123,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // SetupWithManager sets up the controller with the Manager.
 func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&dbv1alphav2.MongoDB{}).
+		For(&dbv1betav1.MongoDB{}).
 		Named("mongodb").
 		Complete(r)
 }

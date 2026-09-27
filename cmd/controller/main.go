@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	mrhachidevv1alphav1 "github.com/mrhachi/mongodb-operator/api/v1alphav1"
-	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	dbv1betav1 "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	"github.com/mrhachi/mongodb-operator/internal/controller"
 	"github.com/mrhachi/mongodb-operator/internal/controller/utils/exec"
 	// +kubebuilder:scaffold:imports
@@ -52,7 +52,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(mrhachidevv1alphav1.AddToScheme(scheme))
-	utilruntime.Must(dbv1alphav2.AddToScheme(scheme))
+	utilruntime.Must(dbv1betav1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

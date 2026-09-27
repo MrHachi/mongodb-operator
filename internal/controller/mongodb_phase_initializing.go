@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mrhachi/mongodb-operator/api/v1alphav2"
-	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	"github.com/mrhachi/mongodb-operator/api/v1betav1"
+	dbv1betav1 "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	rutils "github.com/mrhachi/mongodb-operator/internal/controller/utils/resources"
 	"github.com/mrhachi/mongodb-operator/internal/controller/utils/secrets"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -18,7 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, db *v1alphav2.MongoDB) (reconcile.Result, error) {
+func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, db *v1betav1.MongoDB) (reconcile.Result, error) {
 	logger := logf.FromContext(ctx)
 
 	// TODO: check that this replicaset is, in fact, awaiting initialization:
@@ -70,7 +70,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, db *v1alp
 		return ctrl.Result{}, fmt.Errorf("ensure db initialized: %w", err)
 	}
 
-	db.Status.Phase = dbv1alphav2.PhaseScaling
+	db.Status.Phase = dbv1betav1.PhaseScaling
 
 	logger.Info(
 		"initialization complete, will set to scaling",

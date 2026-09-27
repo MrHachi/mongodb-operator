@@ -1,4 +1,4 @@
-apiVersion: db.mrhachi.dev/v1alphav2
+apiVersion: db.mrhachi.dev/v1betav1
 kind: MongoDB
 metadata:
   labels:

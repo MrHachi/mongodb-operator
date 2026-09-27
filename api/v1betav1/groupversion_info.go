@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alphav2 contains API Schema definitions for the db v1alphav2 API group.
+// Package v1betav1 contains API Schema definitions for the db v1betav1 API group.
 // +kubebuilder:object:generate=true
 // +groupName=db.mrhachi.dev
-package v1alphav2
+package v1betav1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,7 +28,7 @@ import (
 var (
 	// SchemeGroupVersion is group version used to register these objects.
 	// This name is used by applyconfiguration generators (e.g. controller-gen).
-	SchemeGroupVersion = schema.GroupVersion{Group: "db.mrhachi.dev", Version: "v1alphav2"}
+	SchemeGroupVersion = schema.GroupVersion{Group: "db.mrhachi.dev", Version: "v1betav1"}
 
 	// GroupVersion is an alias for SchemeGroupVersion, for backward compatibility.
 	GroupVersion = SchemeGroupVersion

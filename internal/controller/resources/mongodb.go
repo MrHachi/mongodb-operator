@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	api "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	api "github.com/mrhachi/mongodb-operator/api/v1betav1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	dbv1alphav2 "github.com/mrhachi/mongodb-operator/api/v1alphav2"
+	dbv1betav1 "github.com/mrhachi/mongodb-operator/api/v1betav1"
 )
 
 var _ = Describe("MongoDB Controller", func() {
@@ -43,13 +43,13 @@ var _ = Describe("MongoDB Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		mongodb := &dbv1alphav2.MongoDB{}
+		mongodb := &dbv1betav1.MongoDB{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind MongoDB")
 			err := k8sClient.Get(ctx, typeNamespacedName, mongodb)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &dbv1alphav2.MongoDB{
+				resource := &dbv1betav1.MongoDB{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
@@ -62,7 +62,7 @@ var _ = Describe("MongoDB Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &dbv1alphav2.MongoDB{}
+			resource := &dbv1betav1.MongoDB{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
