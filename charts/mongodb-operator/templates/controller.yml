@@ -52,10 +52,14 @@ spec:
         env:
         - name: CONTROLLER_NAME
           value: {{ include "mongodb-controller.name" . }}
-        - name: SA_NAME
+        - name: NAMESPACE
           valueFrom:
             fieldRef:
-              fieldPath: metadata.name
+              fieldPath: metadata.namespace
+        - name: SERVICEACCOUNT_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
         ports:
         - containerPort: 8081
           name: health

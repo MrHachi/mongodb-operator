@@ -81,10 +81,14 @@ spec:
           env:
             - name: CONTROLLER_NAME
               value: mongodb-controller
-            - name: SA_NAME
+            - name: NAMESPACE
               valueFrom:
                 fieldRef:
-                  fieldPath: metadata.name
+                  fieldPath: metadata.namespace
+            - name: SERVICEACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
           # TODO(user): Configure the resources accordingly based on the project requirements.
           # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
           resources:
