@@ -16,7 +16,7 @@ type InitializeRequest struct {
 
 // Attempt the create the admin user with the current client (being the localhost
 // exception client immediately post-creation).
-func (m *MongoManager) EnsureAdminUser(
+func (m *MongoManager) ensureAdminUser(
 	ctx context.Context,
 	username, password string,
 ) error {
@@ -55,14 +55,7 @@ func (m *MongoManager) EnsureAdminUser(
 }
 
 // Expects that a headless service has been created by the intialization step and currently exists
-func (m *MongoManager) EnsureReplicaSet(ctx context.Context, hostname, serviceName string) error {
-	memberHost := fmt.Sprintf(
-		"%s.%s.%s.svc.cluster.local:27017",
-		hostname,
-		serviceName,
-		m.namespace,
-	)
-
+func (m *MongoManager) ensureReplicaSet(ctx context.Context, hostname, serviceName string) error {
 	_, err := m.client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "replSetGetStatus", Value: 1},
 	}).Raw()
@@ -78,8 +71,15 @@ func (m *MongoManager) EnsureReplicaSet(ctx context.Context, hostname, serviceNa
 
 	switch cmdErr.Code {
 	case notYetInitializedCode:
+		memberHost := fmt.Sprintf(
+			"%s.%s.%s.svc.cluster.local:27017",
+			hostname,
+			serviceName,
+			m.namespace,
+		)
+
 		config := bson.D{
-			{Key: "_id", Value: "rs0"},
+			{Key: "_id", Value: m.rsName},
 			{Key: "members", Value: bson.A{
 				bson.D{
 					{Key: "_id", Value: 0},

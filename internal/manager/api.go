@@ -93,19 +93,19 @@ func (m *MongoManager) HandleInitialize(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
-	if err := m.EnsureAdminUser(ctx, req.Username, req.Password); err != nil {
-		m.logger.Error("failed to ensure admin user", zap.Error(err))
-		http.Error(w, "failed to ensure admin user", http.StatusInternalServerError)
-		return
-	}
-
-	if err := m.EnsureReplicaSet(
+	if err := m.ensureReplicaSet(
 		ctx,
 		m.hostname,
 		m.serviceName,
 	); err != nil {
 		m.logger.Error("failed to ensure replica set", zap.Error(err))
 		http.Error(w, "failed to initialize replica set", http.StatusInternalServerError)
+		return
+	}
+
+	if err := m.ensureAdminUser(ctx, req.Username, req.Password); err != nil {
+		m.logger.Error("failed to ensure admin user", zap.Error(err))
+		http.Error(w, "failed to ensure admin user", http.StatusInternalServerError)
 		return
 	}
 

@@ -1,9 +1,14 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/mrhachi/mongodb-operator/internal/manager"
@@ -27,7 +32,7 @@ type Client struct {
 
 // NewInClusterClient initializes a client designed to run inside the Kubernetes cluster.
 // It uses client-go's in-cluster config to request audience-bound tokens on demand.
-func NewInClusterClient(namespace, saName string) (*Client, error) {
+func NewInClusterClient() (*Client, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("in-cluster config: %w", err)
@@ -36,6 +41,16 @@ func NewInClusterClient(namespace, saName string) (*Client, error) {
 	kube, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes clientset: %w", err)
+	}
+
+	namespace := os.Getenv("NAMESPACE")
+	if namespace == "" {
+		return nil, errors.New("NAMESPACE is missing")
+	}
+
+	saName := os.Getenv("SERVICEACCOUNT_NAME")
+	if saName == "" {
+		return nil, errors.New("SERVICEACCOUNT_NAME is missing")
 	}
 
 	return &Client{
@@ -74,7 +89,16 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 }
 
 // doRequest attaches the dynamic Bearer token and performs an HTTP request against the sidecar API.
-func (c *Client) doRequest(ctx context.Context, podIP string, method, path string) (*http.Response, error) {
+func (c *Client) doRequest(ctx context.Context, podIP string, method, path string, payload any) (*http.Response, error) {
+	var payloadBuffer io.Reader
+	if payload != nil {
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+		payloadBuffer = bytes.NewBuffer(payloadBytes)
+	}
+
 	token, err := c.getToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire token: %w", err)
@@ -82,7 +106,7 @@ func (c *Client) doRequest(ctx context.Context, podIP string, method, path strin
 
 	url := fmt.Sprintf("http://%s:%d%s", podIP, DefaultPort, path)
 
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, payloadBuffer)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -98,8 +122,12 @@ func (c *Client) doRequest(ctx context.Context, podIP string, method, path strin
 }
 
 // Initialize calls the /v1/initialize endpoint on a specific Pod member.
-func (c *Client) Initialize(ctx context.Context, podIP string) error {
-	resp, err := c.doRequest(ctx, podIP, http.MethodPost, "/v1/initialize")
+func (c *Client) Initialize(ctx context.Context, podIP, username, password string) error {
+	payload := manager.InitializeRequest{
+		Username: username,
+		Password: password,
+	}
+	resp, err := c.doRequest(ctx, podIP, http.MethodPost, "/v1/initialize", payload)
 	if err != nil {
 		return err
 	}

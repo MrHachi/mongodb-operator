@@ -33,6 +33,7 @@ const (
 type MongoManager struct {
 	kube                             *kubernetes.Clientset
 	namespace, hostname, serviceName string
+	rsName                           string
 
 	logger *zap.Logger
 	mu     sync.Mutex
@@ -53,6 +54,10 @@ func NewMongoManager(ctx context.Context, logger *zap.Logger) (*MongoManager, er
 	if serviceName == "" {
 		return nil, errors.New("SERVICE_NAME is missing")
 	}
+	rsName := os.Getenv("RS_NAME")
+	if serviceName == "" {
+		return nil, errors.New("RS_NAME is missing")
+	}
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -65,7 +70,9 @@ func NewMongoManager(ctx context.Context, logger *zap.Logger) (*MongoManager, er
 	}
 
 	client, err := mongo.Connect(
-		options.Client().ApplyURI("mongodb://localhost:27017"),
+		options.Client().
+			ApplyURI("mongodb://localhost:27017").
+			SetDirect(true), // Crucial: we need to talk directly to local instance in RSGhost (freshly created) state
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create mongo manager: %w", err)
@@ -74,6 +81,7 @@ func NewMongoManager(ctx context.Context, logger *zap.Logger) (*MongoManager, er
 	return &MongoManager{
 		kube:      kube,
 		namespace: namespace, hostname: hostname, serviceName: serviceName,
+		rsName: rsName,
 		logger: logger,
 		client: client,
 	}, nil
