@@ -9,7 +9,7 @@ spec:
   admin:
     username: admin
     secretRef:
-      name: mongodb-admin-secret
+      name: mongodb-sample-admin-pass
   databaseName: sample_db
   replicas: 3
   replicaSet:
@@ -29,7 +29,13 @@ spec:
   users:
     - username: app_user
       secretRef:
-        name: mongodb-app-user-secret
+        name: mongodb-sample-app-user-pass
       roles:
         - database: sample_db
           role: readWrite
+    - username: operation_user
+      secretRef:
+        name: mongodb-sample-operation-user-pass
+      roles:
+        - database: sample_db
+          role: read
