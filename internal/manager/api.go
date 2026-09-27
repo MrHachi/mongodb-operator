@@ -15,8 +15,8 @@ import (
 func (m *MongoManager) Serve(ctx context.Context, addr string) error {
 	r := chi.NewRouter()
 
-	r.Post("/livez", m.HandleLivez)
-	r.Post("/readyz", m.HandleReadyz)
+	r.Get("/livez", m.HandleLivez)
+	r.Get("/readyz", m.HandleReadyz)
 	r.Route("/v1", func(r chi.Router) {
 		r.With(func(next http.Handler) http.Handler {
 			return m.authorize("create", "mongodbs", next)

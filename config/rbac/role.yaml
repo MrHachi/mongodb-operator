@@ -11,6 +11,7 @@ rules:
   - persistentvolumeclaims
   - pods
   - secrets
+  - serviceaccounts
   - services
   verbs:
   - create
@@ -33,16 +34,6 @@ rules:
   - pods/log
   verbs:
   - get
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - create
-  - delete
-  - get
-  - patch
-  - update
 - apiGroups:
   - apps
   resources:
@@ -108,5 +99,7 @@ rules:
   - create
   - delete
   - get
+  - list
   - patch
   - update
+  - watch

@@ -60,10 +60,11 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs/finalizers,verbs=update
 //
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Core resources
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
@@ -90,9 +91,12 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("create in-cluster instance-manager client: %w", imgrClientCreateErr)
 	}
 
-	if !db.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, db)
-	}
+	r.kr = resources.NewMongoDB(db)
+
+	// TODO
+	// if !db.DeletionTimestamp.IsZero() {
+	// 	return r.reconcileDelete(ctx, db) // we need to delete any clusterrolebindings here-they can't have their owner set to the CRD
+	// }
 
 	switch db.Status.Phase {
 	case "":
@@ -106,20 +110,23 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.Status().Update(ctx, db); err != nil {
 			return ctrl.Result{}, fmt.Errorf("set initializing status: %w", err)
 		}
+
+		return ctrl.Result{}, nil
 	case dbv1alphav2.PhaseInitializing:
 		return r.reconcileInitializing(ctx, db)
 
-	case dbv1alphav2.PhaseScaling:
-		return r.reconcileScaling(ctx, desired, actual)
-
-	case dbv1alphav2.PhaseReady:
-		return r.reconcileSteadyState(ctx, desired, actual)
-
-	case dbv1alphav2.PhaseDegraded:
-		return r.reconcileDegraded(ctx, desired, actual)
+	// TODO
+	// 	case dbv1alphav2.PhaseScaling:
+	// 		return r.reconcileScaling(ctx, desired, actual)
+	//
+	// 	case dbv1alphav2.PhaseReady:
+	// 		return r.reconcileSteadyState(ctx, desired, actual)
+	//
+	// 	case dbv1alphav2.PhaseDegraded:
+	// 		return r.reconcileDegraded(ctx, desired, actual)
 
 	default:
-		return ctrl.Result{}, fmt.Errorf("unknown phase %q", desired.Status.Phase)
+		return ctrl.Result{}, fmt.Errorf("unknown phase %q", db.Status.Phase)
 	}
 }
 

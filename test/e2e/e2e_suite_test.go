@@ -32,8 +32,11 @@ import (
 )
 
 var (
-	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "ghcr.io/mrhachi/mongodb-controller:stable"
+	// controllerImage is the controller image to be built and loaded for testing.
+	controllerImage = "ghcr.io/mrhachi/mongodb-controller:stable"
+	// instanceManagerImage is the instance manager image to be built and loaded for testing.
+	// Version needs to be set to the version specified in the controller-managed Pod template.
+	instanceManagerImage = "ghcr.io/mrhachi/mongodb-instance-manager:v0.1"
 	// databaseImage is the database image to be built and loaded for testing.
 	databaseImage = "ghcr.io/mrhachi/mongodb:8.3.7-stable"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
@@ -53,17 +56,25 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
+	By("building the controller image")
+	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", controllerImage))
 	_, err := utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the controller image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind,
-	// ensure the image is built and available, then remove the following block.
-	By("loading the manager image on Kind")
-	err = utils.LoadImageToKindClusterWithName(managerImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+	By("loading the controller image on Kind")
+	err = utils.LoadImageToKindClusterWithName(controllerImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the controller image into Kind")
 
+	By("building the instance manager image")
+	cmd = exec.Command("make", "instance-manager-docker-build", fmt.Sprintf("IMGR_IMG=%s", instanceManagerImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the instance manager image")
+
+	By("loading the instance manage image on Kind")
+	err = utils.LoadImageToKindClusterWithName(instanceManagerImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the instance manage image into Kind")
+
+	// Legacy
 	By("building the database image")
 	cmd = exec.Command("make", "database-docker-build", fmt.Sprintf("DB_IMG=%s", databaseImage))
 	_, err = utils.Run(cmd)

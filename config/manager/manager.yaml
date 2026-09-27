@@ -79,6 +79,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           env:
+            - name: CONTROLLER_NAME
+              value: mongodb-controller
             - name: SA_NAME
               valueFrom:
                 fieldRef:

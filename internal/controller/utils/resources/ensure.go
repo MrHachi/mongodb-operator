@@ -11,6 +11,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
+// Ensure fetches the resource identified by desired from the Kubernetes API server.
+// If the resource exists, it populates actual with the existing resource and returns it.
+// If the resource does not exist (IsNotFound), it applies the optional modifier functions
+// to desired, sets owner as the controller owner reference (if owner is non-nil), creates
+// the desired resource on the API server, and returns desired.
+// The owner parameter is optional-pass nil for cluster-scoped resources or un-owned objects
+// to avoid scope mismatched owner errors.
 func Ensure[T client.Object](
 	ctx context.Context,
 	owner client.Object,
@@ -36,12 +43,14 @@ func Ensure[T client.Object](
 			}
 		}
 
-		if err := controllerutil.SetControllerReference(
-			owner,
-			desired,
-			scheme,
-		); err != nil {
-			return actual, fmt.Errorf("set owner reference: %w", err)
+		if owner != nil {
+			if err := controllerutil.SetControllerReference(
+				owner,
+				desired,
+				scheme,
+			); err != nil {
+				return actual, fmt.Errorf("set owner reference: %w", err)
+			}
 		}
 
 		if err := client.Create(ctx, desired); err != nil {

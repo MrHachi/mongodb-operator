@@ -60,7 +60,8 @@ func (r *MongoDB) DesiredReplicaRBAC() (*corev1.ServiceAccount, *rbacv1.ClusterR
 			},
 		}, &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: crbName,
+				Name:   crbName,
+				Labels: r.labels(nil),
 			},
 			Subjects: []rbacv1.Subject{
 				{
@@ -79,7 +80,6 @@ func (r *MongoDB) DesiredReplicaRBAC() (*corev1.ServiceAccount, *rbacv1.ClusterR
 
 func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
 	podName := fmt.Sprintf("%s-r-%s", r.Name, suffix)
-	keyfileVolumeName := fmt.Sprintf("%s-kf", r.Name)
 
 	podLabels := r.labels(map[string]string{
 		"db.mrhachi.dev/role":   "replica",
@@ -110,10 +110,19 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 				},
 				Volumes: []corev1.Volume{
 					{
+						Name: r.Name,
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: podName,
+								ReadOnly:  false,
+							},
+						},
+					},
+					{
 						Name: "keyfile",
 						VolumeSource: corev1.VolumeSource{
 							Secret: &corev1.SecretVolumeSource{
-								SecretName:  keyfileVolumeName,
+								SecretName:  keyfileSecretName,
 								DefaultMode: new(int32(0400)),
 							},
 						},
@@ -173,6 +182,18 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 								},
 							},
 							InitialDelaySeconds: int32(15),
+						},
+						// Delegate startup status check to instance-manager
+						StartupProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/readyz",
+									Port: intstr.FromInt(8080),
+								},
+							},
+							TimeoutSeconds:   int32(5),
+							FailureThreshold: int32(30),
+							PeriodSeconds:    int32(10),
 						},
 						// ReadinessProbe replaced by instance-manager /readyz
 						Args: []string{

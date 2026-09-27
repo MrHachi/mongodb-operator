@@ -101,7 +101,7 @@ func (r *MongoDBReconciler) ensureRBAC(ctx context.Context) (*corev1.ServiceAcco
 		return nil, nil, fmt.Errorf("ensure sa: %w", err)
 	}
 	actualCrb, err := rutils.Ensure(
-		ctx, r.kr.MongoDB, r.Client, r.Scheme,
+		ctx, nil, r.Client, r.Scheme,
 		desiredCrb,
 		&rbacv1.ClusterRoleBinding{},
 	)

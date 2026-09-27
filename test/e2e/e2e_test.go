@@ -38,22 +38,22 @@ import (
 )
 
 // namespace where the controller is deployed in
-const namespace = "controller-system"
+const namespace = "mongodb-controller-system"
 
 // namespace where the custom resource is deployed in
 const customResourceNamespace = "cr-test"
 
-// serviceAccountName created for the project
-const serviceAccountName = "controller-controller-manager"
+// controllerName is the name of the controller deployed in this test suite
+const controllerName = "mongodb-controller-mongodb-controller"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "controller-controller-manager-metrics-service"
+const metricsServiceName = "mongodb-controller-mongodb-controller-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "controller-metrics-binding"
+const metricsRoleBindingName = "mongodb-controller-metrics-binding"
 
 // customResourceTypeName is the name of the CR type
-const customResourceTypeName = "singletenantmongodb"
+const customResourceTypeName = "mongodb"
 
 // sampleCustomResourceName is the name of the custom resource to to be created
 const sampleCustomResourceName = customResourceTypeName + "-sample"
@@ -64,8 +64,9 @@ const customResourcePort = 27017
 // sampleTemplatePath is the path to the directory that contains sample templates
 // sampleCustomResourceTemplateName is the name of the custom resource sample template to apply to the test cluster
 const (
-	sampleTemplatePath               = "config/samples/"
-	sampleCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
+	sampleTemplatePath                     = "config/samples/"
+	sampleLegacyCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
+	sampleCustomResourceTemplateName       = "db_v1alphav2_mongodb.yaml"
 )
 
 // sampleCustomResourceUsers is the list of usernames and secrets that serve as prerequisites to the custom resource
@@ -111,10 +112,14 @@ var _ = Describe("Operator", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to create custom resource namespace")
 	})
 
-	// After all tests have been executed, clean up by deleting the namespace.
+	// After all tests have been executed, clean up by deleting the namespace and any cluster-scoped resources.
 	AfterAll(func() {
-		By("removing clusterrolebinding")
-		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", "controller-metrics-binding")
+		By("removing metrics clusterrolebinding")
+		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName)
+		_, _ = utils.Run(cmd)
+
+		By("removing instance manager clusterrolebindings")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", "-l", fmt.Sprintf("db.mrhachi.dev/mongodb=%s", sampleCustomResourceName))
 		_, _ = utils.Run(cmd)
 
 		By("removing custom resource namespace")
@@ -179,10 +184,10 @@ var _ = Describe("Operator", Ordered, func() {
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
-			By("deploying the controller-manager")
-			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+			By("deploying the controller")
+			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", controllerImage))
 			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller")
 		})
 
 		AfterAll(func() {
@@ -203,7 +208,7 @@ var _ = Describe("Operator", Ordered, func() {
 				_, _ = utils.Run(cmd)
 			}
 
-			By("undeploying the controller-manager")
+			By("undeploying the controller")
 			cmd = exec.Command("make", "undeploy")
 			_, _ = utils.Run(cmd)
 
@@ -274,7 +279,7 @@ func serviceAccountToken() (string, error) {
 	}`
 
 	By("creating temporary file to store the token request")
-	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
+	secretName := fmt.Sprintf("%s-token-request", controllerName)
 	tokenRequestFile := filepath.Join("/tmp", secretName)
 	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
 	if err != nil {
@@ -287,7 +292,7 @@ func serviceAccountToken() (string, error) {
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
 			namespace,
-			serviceAccountName,
+			controllerName,
 		), "-f", tokenRequestFile)
 
 		output, err := cmd.CombinedOutput()
@@ -313,11 +318,11 @@ func getMetricsOutput() (string, error) {
 }
 
 func verifyControllerManager() {
-	By("validating that the controller-manager pod is running as expected")
+	By("validating that the controller pod is running as expected")
 	verifyControllerUp := func(g Gomega) {
-		By("getting the name of the controller-manager pod")
+		By("getting the name of the controller pod")
 		cmd := exec.Command("kubectl", "get",
-			"pods", "-l", "control-plane=controller-manager",
+			"pods", "-l", fmt.Sprintf("control-plane=%s", "mongodb-controller"),
 			"-o", "go-template={{ range .items }}"+
 				"{{ if not .metadata.deletionTimestamp }}"+
 				"{{ .metadata.name }}"+
@@ -326,7 +331,7 @@ func verifyControllerManager() {
 		)
 
 		podOutput, err := utils.Run(cmd)
-		g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller-manager pod information")
+		g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller pod information")
 		podNames := utils.GetNonEmptyLines(podOutput)
 		g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
 		controllerPodName = podNames[0]
@@ -338,7 +343,7 @@ func verifyControllerManager() {
 		)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
+		g.Expect(output).To(Equal("Running"), "Incorrect controller pod status")
 	}
 	Eventually(verifyControllerUp).Should(Succeed())
 }
@@ -346,8 +351,8 @@ func verifyControllerManager() {
 func verifyMetricsEndpoint() {
 	By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 	cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-		"--clusterrole=controller-metrics-reader",
-		fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
+		"--clusterrole=mongodb-controller-metrics-reader",
+		fmt.Sprintf("--serviceaccount=%s:%s", namespace, controllerName),
 	)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
@@ -413,7 +418,7 @@ func verifyMetricsEndpoint() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
+				}`, token, metricsServiceName, namespace, controllerName))
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 

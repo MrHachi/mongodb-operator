@@ -49,7 +49,7 @@ Selector labels
 {{- define "mongodb-controller.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "mongodb-controller.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-control-plane: controller-manager
+control-plane: mongodb-controller
 {{- end }}
 
 {{/*
