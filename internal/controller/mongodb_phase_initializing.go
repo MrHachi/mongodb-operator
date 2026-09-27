@@ -14,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -60,7 +61,12 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, db *v1alp
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err = r.ensureDbInitialization(ctx, primaryIP); err != nil {
+	adminPassword, err := r.getAdminSecret(ctx, db.Spec.Admin.SecretRef.Name, db.Namespace)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get admin password: %w", err)
+	}
+
+	if err = r.ensureDbInitialization(ctx, primaryIP, db.Spec.Admin.Username, string(adminPassword)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure db initialized: %w", err)
 	}
 
@@ -76,6 +82,22 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, db *v1alp
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *MongoDBReconciler) getAdminSecret(ctx context.Context, secretName, secretNamespace string) ([]byte, error) {
+	adminSecret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      secretName,
+		Namespace: secretNamespace,
+	}, adminSecret); err != nil {
+		return nil, fmt.Errorf("get admin secret: %w", err)
+	}
+
+	adminPassword, ok := adminSecret.Data["password"]
+	if !ok {
+		return nil, fmt.Errorf("admin secret missing 'password' key")
+	}
+	return adminPassword, nil
 }
 
 func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context) (*corev1.Secret, error) {
@@ -146,6 +168,6 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context) (*corev1.
 	)
 }
 
-func (r *MongoDBReconciler) ensureDbInitialization(ctx context.Context, podIP string) error {
-	return r.instanceManagerClient.Initialize(ctx, podIP)
+func (r *MongoDBReconciler) ensureDbInitialization(ctx context.Context, podIP, username, password string) error {
+	return r.instanceManagerClient.Initialize(ctx, podIP, username, password)
 }

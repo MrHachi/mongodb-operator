@@ -80,6 +80,8 @@ func (r *MongoDB) DesiredReplicaRBAC() (*corev1.ServiceAccount, *rbacv1.ClusterR
 
 func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
 	podName := fmt.Sprintf("%s-r-%s", r.Name, suffix)
+	svcName := r.Name
+	rsName := r.Name
 
 	podLabels := r.labels(map[string]string{
 		"db.mrhachi.dev/role":   "replica",
@@ -101,12 +103,37 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 				Labels:    podLabels,
 			},
 			Spec: corev1.PodSpec{
+				// STS adds these guys automatically; they're needed for headless service DNS resolution
+				Hostname: podName, Subdomain: svcName,
+
 				ServiceAccountName: saName,
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot: new(true),
 					RunAsUser:    new(int64(999)),
 					RunAsGroup:   new(int64(999)),
 					FSGroup:      new(int64(999)),
+				},
+				InitContainers: []corev1.Container{
+					{
+						Name:  "copy-keyfile",
+						Image: r.Spec.Image.Tag,
+						Command: []string{
+							"sh",
+							"-c",
+							"cp /etc/kf-secret/keyfile /etc/kf/keyfile && chmod 0400 /etc/kf/keyfile && chown 999:999 /etc/kf/keyfile",
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "keyfile-secret",
+								ReadOnly:  true,
+								MountPath: "/etc/kf-secret",
+							},
+							{
+								Name:      "keyfile",
+								MountPath: "/etc/kf",
+							},
+						},
+					},
 				},
 				Volumes: []corev1.Volume{
 					{
@@ -119,12 +146,18 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 						},
 					},
 					{
-						Name: "keyfile",
+						Name: "keyfile-secret",
 						VolumeSource: corev1.VolumeSource{
 							Secret: &corev1.SecretVolumeSource{
 								SecretName:  keyfileSecretName,
 								DefaultMode: new(int32(0400)),
 							},
+						},
+					},
+					{
+						Name: "keyfile",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -167,7 +200,11 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 							},
 							{
 								Name:  "SERVICE_NAME",
-								Value: r.Name,
+								Value: svcName,
+							},
+							{
+								Name:  "RS_NAME",
+								Value: rsName,
 							},
 						},
 					},
@@ -197,7 +234,7 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 						},
 						// ReadinessProbe replaced by instance-manager /readyz
 						Args: []string{
-							"--replSet", r.Name,
+							"--replSet", rsName,
 							"--clusterAuthMode", "keyFile",
 							"--keyFile", "/etc/kf/keyfile",
 							"--bind_ip_all",
@@ -209,7 +246,6 @@ func (r *MongoDB) DesiredReplicaPod(suffix, keyfileSecretName, saName string) (*
 							},
 							{
 								Name:      "keyfile",
-								ReadOnly:  true,
 								MountPath: "/etc/kf",
 							},
 						},
@@ -282,7 +318,8 @@ func (r *MongoDB) DesiredSvc() *corev1.Service {
 			Labels:    r.labels(nil),
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone, // Headless Service
+			ClusterIP:                corev1.ClusterIPNone, // Headless Service
+			PublishNotReadyAddresses: true,                 // TODO: set conditionally with init flag (only needed during initialization)
 			Selector: r.labels(map[string]string{
 				"db.mrhachi.dev/role": "replica", // Target replica pods so we don't route traffic to arbiters
 			}),

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,18 +32,6 @@ import (
 	podutils "github.com/mrhachi/mongodb-operator/internal/controller/utils/pod"
 	imgrclient "github.com/mrhachi/mongodb-operator/internal/manager/client"
 )
-
-const (
-	defaultSaName = "mongodb-controller"
-)
-
-func saName() string {
-	saName := os.Getenv("SA_NAME")
-	if saName == "" {
-		return defaultSaName
-	}
-	return saName
-}
 
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
@@ -71,6 +58,9 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+//
+// Auth against instance-manager
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -86,7 +76,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	var imgrClientCreateErr error
-	r.instanceManagerClient, imgrClientCreateErr = imgrclient.NewInClusterClient(db.Namespace, saName())
+	r.instanceManagerClient, imgrClientCreateErr = imgrclient.NewInClusterClient()
 	if imgrClientCreateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("create in-cluster instance-manager client: %w", imgrClientCreateErr)
 	}
