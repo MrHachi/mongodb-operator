@@ -157,7 +157,7 @@ func (s *LegacyTestSuite) InstallController() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 	By("deploying the controller")
-	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", controllerImage))
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", controllerImage), fmt.Sprintf("NAMESPACE=%s", s.controllerNamespace))
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller")
 }
