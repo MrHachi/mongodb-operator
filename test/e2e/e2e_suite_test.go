@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2026.
@@ -41,6 +40,21 @@ var (
 	databaseImage = "ghcr.io/mrhachi/mongodb:8.3.7-stable"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
+)
+
+const (
+	controllerNamePrefix                   = "mongodb-controller"
+	controllerNamespace                    = controllerNamePrefix + "-system"
+	controllerName                         = controllerNamePrefix + "-mongodb-controller"
+	controllerMetricsServiceName           = controllerNamePrefix + "-mongodb-controller-metrics-service"
+	controllerMetricsRoleBindingName       = controllerNamePrefix + "-metrics-binding"
+	sampleCustomResourceTypeName           = "mongodb"
+	sampleCustomResourceName               = sampleCustomResourceTypeName + "-sample"
+	sampleCustomResourceNamespace          = "cr-test"
+	sampleCustomResourcePort               = 27017
+	sampleTemplatePath                     = "config/samples/"
+	sampleLegacyCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
+	sampleCustomResourceTemplateName       = "db_v1alphav2_mongodb.yaml"
 )
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
@@ -138,4 +152,24 @@ func teardownCertManager() {
 
 	By("uninstalling CertManager")
 	utils.UninstallCertManager()
+}
+
+// sampleCustomResourceUsers is the list of usernames and secrets that serve as prerequisites to the custom resource
+var sampleCustomResourceUsers = [...]SampleUser{
+	{
+		Username: "admin", PasswordSecretName: sampleCustomResourceName + "-admin-pass",
+		AuthSource: "admin",
+	},
+	{
+		Username: "app", PasswordSecretName: sampleCustomResourceName + "-app-user-pass",
+	},
+	{
+		Username: "operation", PasswordSecretName: sampleCustomResourceName + "-operation-user-pass",
+	},
+}
+
+type SampleUser struct {
+	Username           string
+	PasswordSecretName string
+	AuthSource         string
 }

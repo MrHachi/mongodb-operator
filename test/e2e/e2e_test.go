@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2026.
@@ -37,58 +36,6 @@ import (
 	"github.com/mrhachi/mongodb-operator/test/utils"
 )
 
-// namespace where the controller is deployed in
-const namespace = "mongodb-controller-system"
-
-// namespace where the custom resource is deployed in
-const customResourceNamespace = "cr-test"
-
-// controllerName is the name of the controller deployed in this test suite
-const controllerName = "mongodb-controller-mongodb-controller"
-
-// metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "mongodb-controller-mongodb-controller-metrics-service"
-
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "mongodb-controller-metrics-binding"
-
-// customResourceTypeName is the name of the CR type
-const customResourceTypeName = "mongodb"
-
-// sampleCustomResourceName is the name of the custom resource to to be created
-const sampleCustomResourceName = customResourceTypeName + "-sample"
-
-// customResourcePort is the port number the custom resource uses
-const customResourcePort = 27017
-
-// sampleTemplatePath is the path to the directory that contains sample templates
-// sampleCustomResourceTemplateName is the name of the custom resource sample template to apply to the test cluster
-const (
-	sampleTemplatePath                     = "config/samples/"
-	sampleLegacyCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
-	sampleCustomResourceTemplateName       = "db_v1alphav2_mongodb.yaml"
-)
-
-// sampleCustomResourceUsers is the list of usernames and secrets that serve as prerequisites to the custom resource
-var sampleCustomResourceUsers = [...]SampleUser{
-	{
-		Username: "admin", PasswordSecretName: sampleCustomResourceName + "-admin-pass",
-		AuthSource: "admin",
-	},
-	{
-		Username: "app", PasswordSecretName: sampleCustomResourceName + "-app-user-pass",
-	},
-	{
-		Username: "operation", PasswordSecretName: sampleCustomResourceName + "-operation-user-pass",
-	},
-}
-
-type SampleUser struct {
-	Username           string
-	PasswordSecretName string
-	AuthSource         string
-}
-
 var controllerPodName string
 
 var _ = Describe("Operator", Ordered, func() {
@@ -96,18 +43,18 @@ var _ = Describe("Operator", Ordered, func() {
 	// enforce the restricted security policy to the namespace.
 	BeforeAll(func() {
 		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
+		cmd := exec.Command("kubectl", "create", "ns", controllerNamespace)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
 		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", controllerNamespace,
 			"pod-security.kubernetes.io/enforce=restricted")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 		By("creating custom resource namespace")
-		cmd = exec.Command("kubectl", "create", "ns", customResourceNamespace)
+		cmd = exec.Command("kubectl", "create", "ns", sampleCustomResourceNamespace)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create custom resource namespace")
 	})
@@ -115,7 +62,7 @@ var _ = Describe("Operator", Ordered, func() {
 	// After all tests have been executed, clean up by deleting the namespace and any cluster-scoped resources.
 	AfterAll(func() {
 		By("removing metrics clusterrolebinding")
-		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName)
+		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", controllerMetricsRoleBindingName)
 		_, _ = utils.Run(cmd)
 
 		By("removing instance manager clusterrolebindings")
@@ -123,11 +70,11 @@ var _ = Describe("Operator", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("removing custom resource namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", customResourceNamespace)
+		cmd = exec.Command("kubectl", "delete", "ns", sampleCustomResourceNamespace)
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		cmd = exec.Command("kubectl", "delete", "ns", controllerNamespace)
 		_, _ = utils.Run(cmd)
 	})
 
@@ -137,7 +84,7 @@ var _ = Describe("Operator", Ordered, func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
 			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
+			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", controllerNamespace)
 			controllerLogs, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
@@ -146,7 +93,7 @@ var _ = Describe("Operator", Ordered, func() {
 			}
 
 			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+			cmd = exec.Command("kubectl", "get", "events", "-n", controllerNamespace, "--sort-by=.lastTimestamp")
 			eventsOutput, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
@@ -155,7 +102,7 @@ var _ = Describe("Operator", Ordered, func() {
 			}
 
 			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
+			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", controllerNamespace)
 			metricsOutput, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
@@ -164,7 +111,7 @@ var _ = Describe("Operator", Ordered, func() {
 			}
 
 			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
+			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", controllerNamespace)
 			podDescription, err := utils.Run(cmd)
 			if err == nil {
 				fmt.Println("Pod description:\n", podDescription)
@@ -192,19 +139,19 @@ var _ = Describe("Operator", Ordered, func() {
 
 		AfterAll(func() {
 			By("cleaning up the curl pod for metrics")
-			cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+			cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", controllerNamespace)
 			_, _ = utils.Run(cmd)
 
 			By("deleting any custom resources")
 			cmd = exec.Command("kubectl", "delete", "-f",
 				sampleTemplatePath+sampleCustomResourceTemplateName,
-				"-n", customResourceNamespace)
+				"-n", sampleCustomResourceNamespace)
 			_, _ = utils.Run(cmd)
 
 			for _, user := range sampleCustomResourceUsers {
 				cmd := exec.Command("kubectl", "delete", "secret",
 					user.PasswordSecretName,
-					"-n", customResourceNamespace)
+					"-n", sampleCustomResourceNamespace)
 				_, _ = utils.Run(cmd)
 			}
 
@@ -233,7 +180,7 @@ var _ = Describe("Operator", Ordered, func() {
 	Context("Chart", func() {
 		BeforeAll(func() {
 			By("installing the Helm chart")
-			cmd := exec.Command("make", "chart-install", fmt.Sprintf("HELM=helm -n %s", namespace))
+			cmd := exec.Command("make", "chart-install", fmt.Sprintf("HELM=helm -n %s", controllerNamespace))
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to install Helm chart")
 		})
@@ -242,18 +189,18 @@ var _ = Describe("Operator", Ordered, func() {
 			By("deleting any custom resources")
 			cmd := exec.Command("kubectl", "delete", "-f",
 				sampleTemplatePath+sampleCustomResourceTemplateName,
-				"-n", customResourceNamespace)
+				"-n", sampleCustomResourceNamespace)
 			_, _ = utils.Run(cmd)
 
 			for _, user := range sampleCustomResourceUsers {
 				cmd := exec.Command("kubectl", "delete", "secret",
 					user.PasswordSecretName,
-					"-n", customResourceNamespace)
+					"-n", sampleCustomResourceNamespace)
 				_, _ = utils.Run(cmd)
 			}
 
 			By("uninstalling the Helm chart")
-			cmd = exec.Command("make", "chart-uninstall", fmt.Sprintf(`HELM=helm -n %s`, namespace))
+			cmd = exec.Command("make", "chart-uninstall", fmt.Sprintf(`HELM=helm -n %s`, controllerNamespace))
 			_, _ = utils.Run(cmd)
 		})
 
@@ -291,7 +238,7 @@ func serviceAccountToken() (string, error) {
 		By("executing kubectl command to create the token")
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
-			namespace,
+			controllerNamespace,
 			controllerName,
 		), "-f", tokenRequestFile)
 
@@ -313,7 +260,7 @@ func serviceAccountToken() (string, error) {
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
 func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
+	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", controllerNamespace)
 	return utils.Run(cmd)
 }
 
@@ -327,7 +274,7 @@ func verifyControllerManager() {
 				"{{ if not .metadata.deletionTimestamp }}"+
 				"{{ .metadata.name }}"+
 				"{{ \"\\n\" }}{{ end }}{{ end }}",
-			"-n", namespace,
+			"-n", controllerNamespace,
 		)
 
 		podOutput, err := utils.Run(cmd)
@@ -339,7 +286,7 @@ func verifyControllerManager() {
 		By("validating the pod's status")
 		cmd = exec.Command("kubectl", "get",
 			"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-			"-n", namespace,
+			"-n", controllerNamespace,
 		)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -350,15 +297,15 @@ func verifyControllerManager() {
 
 func verifyMetricsEndpoint() {
 	By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-	cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
+	cmd := exec.Command("kubectl", "create", "clusterrolebinding", controllerMetricsRoleBindingName,
 		"--clusterrole=mongodb-controller-metrics-reader",
-		fmt.Sprintf("--serviceaccount=%s:%s", namespace, controllerName),
+		fmt.Sprintf("--serviceaccount=%s:%s", controllerNamespace, controllerName),
 	)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 	By("validating that the metrics service is available")
-	cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+	cmd = exec.Command("kubectl", "get", "service", controllerMetricsServiceName, "-n", controllerNamespace)
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
@@ -369,7 +316,7 @@ func verifyMetricsEndpoint() {
 
 	By("ensuring the controller pod is ready")
 	verifyControllerPodReady := func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", namespace,
+		cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", controllerNamespace,
 			"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -379,7 +326,7 @@ func verifyMetricsEndpoint() {
 
 	By("verifying that the controller manager is serving the metrics server")
 	verifyMetricsServerStarted := func(g Gomega) {
-		cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
+		cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", controllerNamespace)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(output).To(ContainSubstring("Serving metrics server"),
@@ -391,7 +338,7 @@ func verifyMetricsEndpoint() {
 
 	By("creating the curl-metrics pod to access the metrics endpoint")
 	cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-		"--namespace", namespace,
+		"--namespace", controllerNamespace,
 		"--image=curlimages/curl:latest",
 		"--overrides",
 		fmt.Sprintf(`{
@@ -418,7 +365,7 @@ func verifyMetricsEndpoint() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, token, metricsServiceName, namespace, controllerName))
+				}`, token, controllerMetricsServiceName, controllerNamespace, controllerName))
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
@@ -426,7 +373,7 @@ func verifyMetricsEndpoint() {
 	verifyCurlUp := func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
 			"-o", "jsonpath={.status.phase}",
-			"-n", namespace)
+			"-n", controllerNamespace)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
@@ -449,7 +396,7 @@ func installCustomResource() {
 		cmd := exec.Command("kubectl", "create", "secret", "generic",
 			user.PasswordSecretName,
 			"--from-literal", "password=T3stP@55",
-			"-n", customResourceNamespace)
+			"-n", sampleCustomResourceNamespace)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 	}
@@ -457,15 +404,15 @@ func installCustomResource() {
 	By("deploying a CR instance.")
 	cmd := exec.Command("kubectl", "apply", "-f",
 		sampleTemplatePath+sampleCustomResourceTemplateName,
-		"-n", customResourceNamespace)
+		"-n", sampleCustomResourceNamespace)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 
 	By("waiting for the CR to become ready.")
 	verifyCustomResourceReady := func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+		cmd := exec.Command("kubectl", "get", sampleCustomResourceTypeName, sampleCustomResourceName,
 			"-o", "jsonpath={.status.phase}",
-			"-n", customResourceNamespace)
+			"-n", sampleCustomResourceNamespace)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(output).To(Equal("Ready"), "custom resource in wrong status")
@@ -482,14 +429,14 @@ func verifyCustomResource() {
 		// Get desired pod count
 		desiredCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
 			"-o", "jsonpath={.spec.replicas}",
-			"-n", customResourceNamespace)
+			"-n", sampleCustomResourceNamespace)
 		desiredCountOutput, err := utils.Run(desiredCmd)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		// Get ready pod count
 		readyCmd := exec.Command("kubectl", "get", "sts", sampleCustomResourceName,
 			"-o", "jsonpath={.status.readyReplicas}",
-			"-n", customResourceNamespace)
+			"-n", sampleCustomResourceNamespace)
 		readyCountOutput, err := utils.Run(readyCmd)
 		g.Expect(err).NotTo(HaveOccurred())
 
@@ -504,7 +451,7 @@ func verifyCustomResource() {
 	By("checking the service is correctly configured.")
 	cmd := exec.Command("kubectl", "get", "svc", sampleCustomResourceName,
 		"-o", "jsonpath={.spec.clusterIP}",
-		"-n", customResourceNamespace)
+		"-n", sampleCustomResourceNamespace)
 	output, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal("None"), "service clusterIP is wrong")
@@ -515,7 +462,7 @@ func verifyCustomResource() {
 	var hostb strings.Builder
 	for ord := range desiredCount {
 		hostb.WriteString(fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local:%d,",
-			sampleCustomResourceName, ord, sampleCustomResourceName, customResourceNamespace, customResourcePort))
+			sampleCustomResourceName, ord, sampleCustomResourceName, sampleCustomResourceNamespace, sampleCustomResourcePort))
 	}
 	hostname := hostb.String()
 	Expect(hostname).NotTo(Equal(""), "calculated empty hostname (is desired count equal to zero?)")
@@ -524,7 +471,7 @@ func verifyCustomResource() {
 	// Check the actual hostname
 	cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
 		"-o", "jsonpath={.data.host}",
-		"-n", customResourceNamespace)
+		"-n", sampleCustomResourceNamespace)
 	output, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal(hostname), "config map hostname is wrong")
@@ -532,16 +479,16 @@ func verifyCustomResource() {
 	By("checking the config map contains the expected db_name.")
 
 	// Get the expected database name
-	cmd = exec.Command("kubectl", "get", customResourceTypeName, sampleCustomResourceName,
+	cmd = exec.Command("kubectl", "get", sampleCustomResourceTypeName, sampleCustomResourceName,
 		"-o", "jsonpath={.spec.databaseName}",
-		"-n", customResourceNamespace)
+		"-n", sampleCustomResourceNamespace)
 	databaseName, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Check the actual database name
 	cmd = exec.Command("kubectl", "get", "cm", sampleCustomResourceName+"-connection",
 		"-o", "jsonpath={.data.db_name}",
-		"-n", customResourceNamespace)
+		"-n", sampleCustomResourceNamespace)
 	output, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal(databaseName), "config map db_name is wrong")
@@ -553,7 +500,7 @@ func verifyCustomResource() {
 			passwordCmd := exec.Command(
 				"kubectl", "get", "secret", user.PasswordSecretName,
 				"-o", "jsonpath={.data.password}",
-				"-n", customResourceNamespace,
+				"-n", sampleCustomResourceNamespace,
 			)
 
 			passwordB64, err := utils.Run(passwordCmd)
@@ -580,7 +527,7 @@ func verifyCustomResource() {
 
 			cmd := exec.Command("kubectl", "run", "mongo-client-"+strconv.Itoa(idx),
 				"--rm", "-i", "--restart=Never", "--image=mongo:8",
-				"-n", customResourceNamespace,
+				"-n", sampleCustomResourceNamespace,
 				"--command", "--", "mongosh", connstr,
 				"--eval", "quit(db.adminCommand({ ping: 1 }).ok == 1 ? 0 : 1)", // exit status 0 if ok, 1 if not
 			)
