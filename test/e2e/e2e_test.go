@@ -34,22 +34,24 @@ import (
 )
 
 type LegacyTestSuite struct {
-	controllerNamespace     string
-	controllerPodName       string
-	customResourceNamespace string
-	customResourceTypeName  string
-	customResourceName      string
+	controllerNamespace string
 
-	users []SampleUser
+	customResourceNamespace    string
+	customResourceTemplateName string
+	customResourceTypeName     string
+	customResourceName         string
+
+	controllerPodName string
+	users             []SampleUser
 }
 
-func NewLegacyTestSuite(controllerNamespace, controllerPodName, customResourceNamespace, customResourceTypeName string) *LegacyTestSuite {
+func NewLegacyTestSuite(controllerNamespace, customResourceNamespace, customResourceTemplateName, customResourceTypeName string) *LegacyTestSuite {
 	return &LegacyTestSuite{
-		controllerNamespace:     controllerNamespace,
-		controllerPodName:       controllerPodName,
-		customResourceNamespace: customResourceNamespace,
-		customResourceTypeName:  customResourceTypeName,
-		customResourceName:      customResourceTypeName + "-sample",
+		controllerNamespace:        controllerNamespace,
+		customResourceNamespace:    customResourceNamespace,
+		customResourceTemplateName: customResourceTemplateName,
+		customResourceTypeName:     customResourceTypeName,
+		customResourceName:         customResourceTypeName + "-sample",
 
 		users: []SampleUser{
 			{
@@ -68,7 +70,7 @@ func NewLegacyTestSuite(controllerNamespace, controllerPodName, customResourceNa
 
 // Before running the tests, set up the environment by creating the namespace and
 // enforce the restricted security policy to the namespace.
-func (s *LegacyTestSuite) EnvironmentSetup() {
+func (s *LegacyTestSuite) SetupEnvironment() {
 	By("creating manager namespace")
 	cmd := exec.Command("kubectl", "create", "ns", s.controllerNamespace)
 	_, err := utils.Run(cmd)
@@ -87,7 +89,7 @@ func (s *LegacyTestSuite) EnvironmentSetup() {
 }
 
 // After all tests have been executed, clean up by deleting the namespace and any cluster-scoped resources.
-func (s *LegacyTestSuite) EnvironmentTeardown() {
+func (s *LegacyTestSuite) TeardownEnvironment() {
 	By("removing metrics clusterrolebinding")
 	cmd := exec.Command("kubectl", "delete", "clusterrolebinding", controllerMetricsRoleBindingName)
 	_, _ = utils.Run(cmd)
@@ -107,7 +109,7 @@ func (s *LegacyTestSuite) EnvironmentTeardown() {
 
 // After each test, check for failures and collect logs, events,
 // and pod descriptions for debugging.
-func (s *LegacyTestSuite) FailureCheck() {
+func (s *LegacyTestSuite) CheckTestFailure() {
 	specReport := CurrentSpecReport()
 	if specReport.Failed() {
 		By("Fetching controller manager pod logs")
@@ -148,7 +150,7 @@ func (s *LegacyTestSuite) FailureCheck() {
 	}
 }
 
-func (s *LegacyTestSuite) ControllerSetup() {
+func (s *LegacyTestSuite) InstallController() {
 	By("installing CRDs")
 	cmd := exec.Command("make", "install")
 	_, err := utils.Run(cmd)
@@ -160,14 +162,14 @@ func (s *LegacyTestSuite) ControllerSetup() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller")
 }
 
-func (s *LegacyTestSuite) ControllerTeardown() {
+func (s *LegacyTestSuite) UninstallController() {
 	By("cleaning up the curl pod for metrics")
 	cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", s.controllerNamespace)
 	_, _ = utils.Run(cmd)
 
 	By("deleting any custom resources")
 	cmd = exec.Command("kubectl", "delete", "-f",
-		sampleTemplatePath+sampleCustomResourceTemplateName,
+		sampleTemplatePath+s.customResourceTemplateName,
 		"-n", s.customResourceNamespace)
 	_, _ = utils.Run(cmd)
 
@@ -187,17 +189,17 @@ func (s *LegacyTestSuite) ControllerTeardown() {
 	_, _ = utils.Run(cmd)
 }
 
-func (s *LegacyTestSuite) ChartSetup() {
+func (s *LegacyTestSuite) InstallChart() {
 	By("installing the Helm chart")
 	cmd := exec.Command("make", "chart-install", fmt.Sprintf("HELM=helm -n %s", s.controllerNamespace))
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to install Helm chart")
 }
 
-func (s *LegacyTestSuite) ChartTeardown() {
+func (s *LegacyTestSuite) UninstallChart() {
 	By("deleting any custom resources")
 	cmd := exec.Command("kubectl", "delete", "-f",
-		sampleTemplatePath+sampleCustomResourceTemplateName,
+		sampleTemplatePath+s.customResourceTemplateName,
 		"-n", s.customResourceNamespace)
 	_, _ = utils.Run(cmd)
 
@@ -215,7 +217,7 @@ func (s *LegacyTestSuite) ChartTeardown() {
 
 // Tests that the Controller deploys successfully.
 // Sets controllerPodName on LegacyTestSuite.
-func (s *LegacyTestSuite) ControllerDeployTest() {
+func (s *LegacyTestSuite) DeployController() {
 	It("should run successfully", func() {
 		By("validating that the controller pod is running as expected")
 		verifyControllerUp := func(g Gomega) {
@@ -345,7 +347,7 @@ func (s *LegacyTestSuite) ControllerDeployTest() {
 	})
 }
 
-func (s *LegacyTestSuite) SampleResourceDeployTest() {
+func (s *LegacyTestSuite) DeployCustomResource() {
 	// Apply sample CR and check status.
 	It("should successfully install a CR deployment", func() {
 		By("deploying CR prerequisite secrets")
@@ -360,7 +362,7 @@ func (s *LegacyTestSuite) SampleResourceDeployTest() {
 
 		By("deploying a CR instance.")
 		cmd := exec.Command("kubectl", "apply", "-f",
-			sampleTemplatePath+sampleCustomResourceTemplateName,
+			sampleTemplatePath+s.customResourceTemplateName,
 			"-n", s.customResourceNamespace)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
@@ -498,52 +500,12 @@ func (s *LegacyTestSuite) SampleResourceDeployTest() {
 	})
 }
 
-var _ = Describe("Operator", Ordered, func() {
+var _ = RunTest(
+	NewLegacyTestSuite(
+		"legacy-system",
 
-	BeforeAll(func() {
-		// EnvironmentSetup()
-	})
-
-	AfterAll(func() {
-		// EnvironmentTeardown()
-	})
-
-	AfterEach(func() {
-		// FailureCheck()
-	})
-
-	SetDefaultEventuallyTimeout(2 * time.Minute)
-	SetDefaultEventuallyPollingInterval(time.Second)
-
-	Context("Controller", func() {
-		BeforeAll(func() {
-			// ControllerSetup()
-		})
-
-		AfterAll(func() {
-			// ControllerTeardown()
-		})
-
-		// ControllerDeployTest()
-
-		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		// CustomResourceDeployTest()
-	})
-
-	Context("Chart", func() {
-		BeforeAll(func() {
-			// ChartSetup()
-		})
-
-		AfterAll(func() {
-			// ChartTeardown()
-		})
-
-		// ControllerDeployTest()
-
-		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		// CustomResourceDeployTest()
-	})
-})
+		"legacy-test",
+		"db_v1alphav1_singletenantmongodb.yaml",
+		"singletenantmongodb",
+	),
+)

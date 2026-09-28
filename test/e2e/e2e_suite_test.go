@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -45,18 +46,12 @@ var (
 )
 
 const (
-	controllerNamePrefix = "mongodb-controller"
-	// controllerNamespace                    = controllerNamePrefix + "-system"
+	controllerNamePrefix             = "mongodb-controller"
 	controllerName                   = controllerNamePrefix + "-mongodb-controller"
 	controllerMetricsServiceName     = controllerNamePrefix + "-mongodb-controller-metrics-service"
 	controllerMetricsRoleBindingName = controllerNamePrefix + "-metrics-binding"
-	// sampleCustomResourceTypeName     = "mongodb"
-	// sampleCustomResourceName         = sampleCustomResourceTypeName + "-sample"
-	// sampleCustomResourceNamespace          = "cr-test"
-	sampleCustomResourcePort               = 27017
-	sampleTemplatePath                     = "config/samples/"
-	sampleLegacyCustomResourceTemplateName = "db_v1alphav1_singletenantmongodb.yaml"
-	sampleCustomResourceTemplateName       = "db_v1alphav2_mongodb.yaml"
+	sampleCustomResourcePort         = 27017
+	sampleTemplatePath               = "config/samples/"
 )
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
@@ -209,4 +204,68 @@ type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
+}
+
+type TestSuite interface {
+	SetupEnvironment()
+	TeardownEnvironment()
+	CheckTestFailure()
+	InstallController()
+	UninstallController()
+	InstallChart()
+	UninstallChart()
+	DeployController()
+	DeployCustomResource()
+}
+
+func RunTest(s TestSuite) bool {
+	return Describe("Operator", Ordered, func() {
+
+		BeforeAll(func() {
+			s.SetupEnvironment()
+		})
+
+		AfterAll(func() {
+			s.TeardownEnvironment()
+		})
+
+		AfterEach(func() {
+			s.CheckTestFailure()
+		})
+
+		SetDefaultEventuallyTimeout(2 * time.Minute)
+		SetDefaultEventuallyPollingInterval(time.Second)
+
+		Context("Controller", func() {
+			BeforeAll(func() {
+				s.InstallController()
+			})
+
+			AfterAll(func() {
+				s.UninstallController()
+			})
+
+			s.DeployController()
+
+			// +kubebuilder:scaffold:e2e-webhooks-checks
+
+			s.DeployCustomResource()
+		})
+
+		Context("Chart", func() {
+			BeforeAll(func() {
+				s.InstallChart()
+			})
+
+			AfterAll(func() {
+				s.UninstallChart()
+			})
+
+			s.DeployController()
+
+			// +kubebuilder:scaffold:e2e-webhooks-checks
+
+			s.DeployCustomResource()
+		})
+	})
 }
