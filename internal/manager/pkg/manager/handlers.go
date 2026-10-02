@@ -30,28 +30,30 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 	}
 }
 
-func (m *InstanceManager) Authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, "Missing or invalid authorization header", http.StatusUnauthorized)
-			return
-		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+func (m *InstanceManager) RequirePermission(verb, group, resource string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+				http.Error(w, "Missing or invalid authorization header", http.StatusUnauthorized)
+				return
+			}
+			token := strings.TrimPrefix(authHeader, "Bearer ")
 
-		namespace := r.Header.Get("X-Kubernetes-Namespace")
-		if namespace == "" {
-			http.Error(w, "Missing X-Kubernetes-Namespace header", http.StatusBadRequest)
-			return
-		}
+			namespace := r.Header.Get("X-Kubernetes-Namespace")
+			if namespace == "" {
+				http.Error(w, "Missing X-Kubernetes-Namespace header", http.StatusBadRequest)
+				return
+			}
 
-		if err := m.authenticator.VerifyOperatorToken(r.Context(), token, namespace, "create"); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
+			if err := m.authenticator.VerifyOperatorToken(r.Context(), token, namespace, verb); err != nil {
+				http.Error(w, err.Error(), http.StatusForbidden)
+				return
+			}
 
-		next.ServeHTTP(w, r)
-	})
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +88,24 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Request) {
+	topology, err := m.client.GetTopology(r.Context())
+	if err != nil {
+		if strings.Contains(err.Error(), "cluster not initialized") {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(topology); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 type AdminRequest struct {

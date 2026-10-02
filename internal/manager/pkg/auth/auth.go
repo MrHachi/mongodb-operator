@@ -29,7 +29,7 @@ func NewAuthenticator(config *rest.Config) (*Authenticator, error) {
 }
 
 // VerifyOperatorToken checks if the token is valid and has the necessary permissions.
-func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token string, namespace string, verb string) error {
+func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespace, verb string) error {
 	tokenReview := &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{
 			Token: token,
@@ -45,7 +45,7 @@ func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token string, n
 		return fmt.Errorf("token is not authenticated: %s", review.Status.Error)
 	}
 
-	// Check permission to perform the requested verb on mongodbs in db.mrhachi.dev in the given namespace
+	// Check permission to perform the requested verb on resource in the given group in the given namespace
 	sar := &authzv1.SubjectAccessReview{
 		Spec: authzv1.SubjectAccessReviewSpec{
 			User:   review.Status.User.Username,
