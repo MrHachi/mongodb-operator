@@ -36,3 +36,16 @@ Creates the administrative user for the MongoDB instance.
 - **Description**: Creates a dedicated administrative user with required privileges for cluster management.
 - **Idempotency**: This endpoint must be idempotent. If the admin user already exists, it should return a `409` response.
 - **Implementation Detail**: The sidecar should use the MongoDB Go driver to execute the command.
+
+## Configuration
+
+The following environment variables must be provided to the instance-manager container. These are injected by the MongoDB Operator.
+
+| Environment Variable | Description | Default |
+|----------------------|-------------|---------|
+| `MONGODB_RS_NAME` | The name of the MongoDB Replica Set. | (Required) |
+| `MONGODB_HOSTNAME` | The hostname of the MongoDB instance. | (Required) |
+| `MONGODB_SERVICE_NAME` | The Kubernetes service name for the MongoDB instance. | (Required) |
+| `MONGODB_NAMESPACE` | The Kubernetes namespace where the MongoDB instance is running. | (Required) |
+| `MONGODB_URI` | The MongoDB connection URI. | `mongodb://localhost:27017` |
+| `PORT` | The port on which the server listens. | `8080` |
