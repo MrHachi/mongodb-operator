@@ -35,10 +35,12 @@ This phase focuses on setting up the first primary node and the foundational clu
     - **Networking**: Creates a `Headless Service` for intra-cluster communication.
 - **Cluster Bootstrapping**:
     - The operator waits for the Primary Pod to reach the `Ready` state (requeuing the reconciliation every 15 seconds if not ready).
-    - **RS Initiation**: Once ready, the operator calls `POST /v1/initiate` on the sidecar.
-    - **Admin User Creation**: The operator calls `POST /v1/admin` on the sidecar.
-    - Both operations are designed to be **idempotent** to handle retries safely.
-        - The instance manager returns a `409` response if each operation is already completed, and the operator handles this gracefully.
+    - **RS Initiation**: once the Pod becomes ready, the operator does the following:
+        - **RS Status Check**: the operator calls `GET /v1/topology` on the instance manager to check RS initiation status.
+        - **Execute RS Initiation**: if `GET /v1/topology` returns a `412 not initialized` status, the operator calls `POST /v1/initiate`.
+    - **Admin User Creation**: once the MongoDB primary is confirmed to be running in RS mode, the operator creates the admin user.
+        - **Admin User Auth Attempt**: the operator attempts to authenticate by calling `POST /v1/authenticate` with the admin user's credentials on the instance manager.
+        - **Execute Admin User Creation**: if `POST /v1/authenticate` returns a `401 unauthenticated` status, the operator calls `POST /v1/admin` on the instance manager with the admin user's credentials.
 - **Transition**: Upon successful completion, the CR `status.phase` is updated to `Scaling`.
 
 ### 2. Scaling Phase (`status.phase = Scaling`)
