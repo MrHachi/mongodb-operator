@@ -8,6 +8,8 @@ func (h *InstanceManager) Serve() *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Route("/v1", func(r chi.Router) {
+		r.Post("/authenticate", h.HandleAuthenticate)
+
 		// Routes that require 'create' permission on 'mongodbs' in 'db.mrhachi.dev'
 		r.Group(func(r chi.Router) {
 			r.Use(h.RequirePermission("create", "db.mrhachi.dev", "mongodbs"))

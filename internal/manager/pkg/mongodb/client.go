@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -20,6 +21,7 @@ type Member struct {
 
 type Client struct {
 	client *mongo.Client
+	uri    string
 }
 
 func NewClient(ctx context.Context, uri string) (*Client, error) {
@@ -27,15 +29,48 @@ func NewClient(ctx context.Context, uri string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to mongodb: %w", err)
 	}
-	return &Client{client: client}, nil
+	return &Client{client: client, uri: uri}, nil
 }
 
 func (c *Client) Close(ctx context.Context) error {
 	return c.client.Disconnect(ctx)
 }
 
-// InitiateReplicaSet triggers the MongoDB rs.initivate() command.
+// Authenticate verifies the provided credentials and returns a new connection URI.
+func (c *Client) Authenticate(ctx context.Context, username, password, authSource string) (string, error) {
+	u, err := url.Parse(c.uri)
+	if err != nil {
+		return "", fmt.Errorf("parse uri: %w", err)
+	}
+	newURI := u.String()
+
+	credential := options.Credential{
+		AuthSource: authSource,
+		Username:   username,
+		Password:   password,
+	}
+
+	client, err := mongo.Connect(
+		ctx,
+		options.Client().
+			ApplyURI(newURI).
+			SetAuth(credential),
+	)
+	if err != nil {
+		return "", fmt.Errorf("connect to mongodb with new credentials: %w", err)
+	}
+
+	if err := client.Ping(ctx, nil); err != nil {
+		client.Disconnect(ctx)
+		return "", fmt.Errorf("authentication failed: %w", err)
+	}
+
+	return newURI, nil
+}
+
+// InitiateReplicaSet triggers the MongoDB rs.initiate() command.
 func (c *Client) InitiateReplicaSet(ctx context.Context, rsName, host string) error {
+	// This operation requires the admin DB
 	db := c.client.Database("admin")
 
 	command := bson.D{
