@@ -13,8 +13,9 @@ import (
 )
 
 type InstanceManager struct {
-	mu               sync.Mutex
-	client           *mongodb.Client
+	mu     sync.Mutex
+	client *mongodb.Client
+
 	authenticator    *auth.Authenticator
 	rsName, hostname string
 }
@@ -67,10 +68,9 @@ func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Requ
 	}
 
 	m.mu.Lock()
-	currentClient := m.client
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 
-	newURI, err := currentClient.Authenticate(r.Context(), req.Username, req.Password, req.AuthSource)
+	newURI, err := m.client.Authenticate(r.Context(), req.Username, req.Password, req.AuthSource)
 	if err != nil {
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
@@ -82,10 +82,8 @@ func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	m.mu.Lock()
 	oldClient := m.client
 	m.client = newClient
-	m.mu.Unlock()
 
 	if oldClient != nil {
 		go oldClient.Close(context.Background())

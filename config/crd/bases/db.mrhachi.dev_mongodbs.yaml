@@ -116,6 +116,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              phase:
+                description: |-
+                  Phase represents the current phase of the MongoDB cluster lifecycle
+                  Valid values are: Initializing, Scaling, Ready, Degraded
+                type: string
             type: object
         required:
         - spec
