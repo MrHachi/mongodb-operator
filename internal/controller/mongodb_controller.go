@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -44,6 +45,7 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -117,6 +119,10 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 	}
 
 	// - Create a Headless Service for intra-cluster communication
+	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+		log.Error(err, "Failed to ensure headless service", "name", mongodb.Name)
+		return ctrl.Result{}, fmt.Errorf("ensureHeadlessService: %w", err)
+	}
 
 	// 2. Cluster Bootstrapping
 	// - Wait for Primary Pod to be Ready (requeue every 15s if not)
@@ -355,6 +361,48 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 	}
 
 	return r.Create(ctx, pod)
+}
+
+func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	serviceName := mongodb.Name
+	service := &corev1.Service{}
+	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: mongodb.Namespace}, service)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get headless service: %w", err)
+	}
+
+	service = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: mongodb.Namespace,
+			Labels:    r.labels(mongodb),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:                corev1.ClusterIPNone,
+			PublishNotReadyAddresses: true,
+			Selector: r.labels(mongodb,
+				"db.mrhachi.dev/role", "replica",
+			),
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "mongodb",
+					Port:       27017,
+					TargetPort: intstr.FromInt32(27017),
+				},
+			},
+		},
+	}
+
+	if err := ctrl.SetControllerReference(mongodb, service, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on headless service: %w", err)
+	}
+	if err := r.Create(ctx, service); err != nil {
+		return fmt.Errorf("create headless service: %w", err)
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
