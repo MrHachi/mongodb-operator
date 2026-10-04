@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -104,7 +105,17 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 	}
 
 	// - Provision PVC for database data
+	if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
+		log.Error(err, "Failed to ensure PVC", "name", mongodb.Name, "id", "a")
+		return ctrl.Result{}, fmt.Errorf("ensurePVC: %w", err)
+	}
+
 	// - Deploy the initial primary pod (-r-a)
+	if err := r.ensureReplicaPod(ctx, mongodb, "a"); err != nil {
+		log.Error(err, "Failed to ensure replica pod", "name", mongodb.Name, "id", "a")
+		return ctrl.Result{}, fmt.Errorf("ensureReplicaPod: %w", err)
+	}
+
 	// - Create a Headless Service for intra-cluster communication
 
 	// 2. Cluster Bootstrapping
@@ -122,6 +133,22 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 	return ctrl.Result{}, nil
 }
 
+func (r *MongoDBReconciler) labels(mongodb *dbv1beta1.MongoDB, custom ...string) map[string]string {
+	if mongodb == nil {
+		return map[string]string{}
+	}
+
+	labels := make(map[string]string, 2+(len(custom)/2))
+	labels["app.kubernetes.io/name"] = mongodb.Name
+	labels["db.mrhachi.dev/mongodb"] = mongodb.Name
+
+	for i := 0; i+1 < len(custom); i += 2 {
+		labels[custom[i]] = custom[i+1]
+	}
+
+	return labels
+}
+
 func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
 	secretName := fmt.Sprintf("%s-keyfile", mongodb.Name)
 	secret := &corev1.Secret{
@@ -129,6 +156,7 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: mongodb.Namespace,
+			Labels:    r.labels(mongodb),
 		},
 	}
 
@@ -151,13 +179,6 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 			secret.Data = make(map[string][]byte)
 		}
 		secret.Data["mongodb-keyfile"] = key
-
-		// Ensure labels and owner reference are also set
-		if secret.Labels == nil {
-			secret.Labels = make(map[string]string)
-		}
-		secret.Labels["app.kubernetes.io/name"] = mongodb.Name
-		secret.Labels["db.mrhachi.dev/mongodb"] = mongodb.Name
 
 		if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
 			return fmt.Errorf("set owner reference on keyfile secret: %w", err)
@@ -186,10 +207,7 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: mongodb.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name": mongodb.Name,
-				"db.mrhachi.dev/mongodb": mongodb.Name,
-			},
+			Labels:    r.labels(mongodb),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
@@ -214,6 +232,129 @@ func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
+	pvcName := fmt.Sprintf("%s-r-%s-data", mongodb.Name, id)
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Namespace: mongodb.Namespace,
+			Labels: r.labels(mongodb,
+				"db.mrhachi.dev/role", "replica",
+				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
+			),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("20Gi"),
+				},
+			},
+		},
+	}
+
+	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: mongodb.Namespace}, pvc)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get pvc: %w", err)
+	}
+
+	if err := ctrl.SetControllerReference(mongodb, pvc, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on pvc: %w", err)
+	}
+
+	return r.Create(ctx, pvc)
+}
+
+func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
+	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, id)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: mongodb.Namespace,
+			Labels: r.labels(mongodb,
+				"db.mrhachi.dev/role", "replica",
+				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
+			),
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyAlways,
+			Containers: []corev1.Container{
+				{
+					Name:    "setup-keyfile",
+					Image:   "mongo:latest",
+					Command: []string{"sh", "-c", "chown 999:999 /data/configdb/mongodb.key && chmod 0600 /data/configdb/mongodb.key"},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "keyfile",
+							MountPath: "/data/configdb",
+						},
+					},
+				},
+				{
+					Name:  "instance-manager",
+					Image: "ghcr.io/mrhachi/mongodb-instance-manager:v0.1",
+					Ports: []corev1.ContainerPort{
+						{
+							Name:          "http",
+							ContainerPort: 8080,
+						},
+					},
+				},
+				{
+					Name:    "mongodb",
+					Image:   "mongo:latest",
+					Command: []string{"mongod", "--keyFile", "/data/configdb/mongodb.key", "--replSet", mongodb.Name},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "data",
+							MountPath: "/data/db",
+						},
+						{
+							Name:      "keyfile",
+							MountPath: "/data/configdb",
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "keyfile",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName: fmt.Sprintf("%s-keyfile", mongodb.Name),
+						},
+					},
+				},
+				{
+					Name: "data",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: fmt.Sprintf("%s-r-%s-data", mongodb.Name, id),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get replica pod: %w", err)
+	}
+
+	if err := ctrl.SetControllerReference(mongodb, pod, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on replica pod: %w", err)
+	}
+
+	return r.Create(ctx, pod)
 }
 
 // SetupWithManager sets up the controller with the Manager.
