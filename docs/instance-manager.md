@@ -10,6 +10,7 @@ GHCR repository tag: `ghcr.io/mrhachi/mongodb-instance-manager`
 - **Protocol**: `HTTP/1.1`
 - **Authentication**: All requests must include a Kubernetes ServiceAccount token in the header:
   `Authorization: Bearer <token>`
+- **Authorization scope**: The sidecar checks permissions in the MongoDB namespace configured through `MONGODB_NAMESPACE`; callers do not provide a namespace header.
 
 ### Security Enforcement
 

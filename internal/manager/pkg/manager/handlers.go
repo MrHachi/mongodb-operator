@@ -18,6 +18,7 @@ type InstanceManager struct {
 
 	authenticator    *auth.Authenticator
 	rsName, hostname string
+	namespace        string
 }
 
 func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, rsName, hostname, serviceName, namespace string) *InstanceManager {
@@ -31,6 +32,7 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 			serviceName,
 			namespace,
 		),
+		namespace: namespace,
 	}
 }
 
@@ -44,13 +46,7 @@ func (m *InstanceManager) RequirePermission(verb, group, resource string) func(h
 			}
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 
-			namespace := r.Header.Get("X-Kubernetes-Namespace")
-			if namespace == "" {
-				http.Error(w, "Missing X-Kubernetes-Namespace header", http.StatusBadRequest)
-				return
-			}
-
-			if err := m.authenticator.VerifyOperatorToken(r.Context(), token, namespace, verb); err != nil {
+			if err := m.authenticator.VerifyOperatorToken(r.Context(), token, m.namespace, verb); err != nil {
 				http.Error(w, fmt.Sprintf("verify operator token: %v", err), http.StatusForbidden)
 				return
 			}
