@@ -27,6 +27,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resourceNames:
+  - controller-manager
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+- apiGroups:
   - db.mrhachi.dev
   resources:
   - mongodbs

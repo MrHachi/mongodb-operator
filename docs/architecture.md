@@ -53,13 +53,14 @@ Security is implemented via Kubernetes RBAC and sidecar-based authentication.
 
 ### Authentication Flow
 
-1. The operator sends an HTTP request with the ServiceAccount token in the `Authorization: Bearer {token}` header.
-2. The `instance-manager` sidecar uses the `client-go` package to perform a `TokenReview`.
-3. The sidecar verifies that the operator has the required permissions.
+1. The operator requests a short-lived ServiceAccount token through the Kubernetes TokenRequest API with the `db.mrhachi.dev/mongodb/instance-manager` audience.
+2. The operator sends the token in the `Authorization: Bearer {token}` header.
+3. The `instance-manager` sidecar validates the token with a `TokenReview` for that audience.
+4. The sidecar checks the operator's permissions with a `SubjectAccessReview` in the MongoDB resource's namespace.
 
 ### RBAC Requirements
 
-- **Operator ServiceAccount**: Requires `create` permission for `db.mrhachi.dev` group, `mongodbs` resource.
+- **Operator ServiceAccount**: Requires `create` permission on its own `serviceaccounts/token` resource, and `create` / `get` permission for `db.mrhachi.dev` group, `mongodbs` resource.
 - **DB Pod ServiceAccount**: Requires `create` permission for `tokenreviews` and `subjectaccessreviews` (to allow the sidecar to perform identity verification).
 
 ## Naming & Labeling
