@@ -341,8 +341,133 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(password).NotTo(BeEmpty())
 		})
+
+		It("resumes initialization after the operator restarts and recreates deleted resources", func() {
+			const testNamespace = "mongodb-recovery-e2e"
+			const clusterName = "recovery-e2e"
+			createMongoDBTestResource(testNamespace, clusterName)
+
+			By("waiting until the initial Pod exists before restarting the operator")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", clusterName+"-r-a", "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 3*time.Minute).Should(Succeed())
+
+			By("deleting the controller manager Pod during initialization")
+			cmd := exec.Command("kubectl", "delete", "pod", "-l", "control-plane=controller-manager", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pods", "-l", "control-plane=controller-manager", "-n", namespace,
+					"-o", "jsonpath={.items[0].status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Running"))
+			}, 3*time.Minute).Should(Succeed())
+
+			By("deleting managed resources while the cluster is still initializing")
+			for _, resource := range []struct{ kind, name string }{{"service", clusterName}, {"pod", clusterName + "-r-a"}} {
+				cmd = exec.Command("kubectl", "delete", resource.kind, resource.name, "-n", testNamespace)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
+					_, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+				}, 3*time.Minute).Should(Succeed())
+			}
+
+			By("waiting for initialization to resume")
+			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
+		})
+
+		It("reports incomplete admin credentials as degraded", func() {
+			const testNamespace = "mongodb-credentials-e2e"
+			const clusterName = "credentials-e2e"
+			createMongoDBTestResource(testNamespace, clusterName)
+			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
+
+			By("removing the username from the managed credentials Secret")
+			cmd := exec.Command("kubectl", "patch", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
+				"--type=merge", "-p", `{"data":{"username":""}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			By("resetting the MongoDB phase so existing-cluster credentials are checked")
+			cmd = exec.Command("kubectl", "patch", "mongodb", clusterName, "-n", testNamespace, "--subresource=status",
+				"--type=merge", "-p", `{"status":{"phase":"Initializing"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			waitForMongoDBStatus(testNamespace, clusterName, "Degraded", "CredentialsIncomplete", 3*time.Minute)
+		})
+
+		It("reports a ClusterIP replacement service as an unsafe mismatch", func() {
+			const testNamespace = "mongodb-service-drift-e2e"
+			const clusterName = "service-drift-e2e"
+			createMongoDBTestNamespace(testNamespace)
+
+			By("creating a standard ClusterIP Service where the operator expects its headless Service")
+			cmd := exec.Command("kubectl", "create", "service", "clusterip", clusterName, "--tcp=27017:27017", "-n", testNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			createMongoDBResource(testNamespace, clusterName)
+
+			By("confirming reconciliation remains blocked and the Service stays ClusterIP")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace, "-o", "jsonpath={.status.phase}")
+				phase, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(phase).To(Equal("Initializing"))
+				cmd = exec.Command("kubectl", "get", "service", clusterName, "-n", testNamespace, "-o", "jsonpath={.spec.clusterIP}")
+				clusterIP, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(clusterIP).NotTo(Equal("None"))
+			}, 3*time.Minute).Should(Succeed())
+		})
 	})
 })
+
+func createMongoDBTestNamespace(testNamespace string) {
+	By("creating namespace " + testNamespace)
+	cmd := exec.Command("kubectl", "create", "namespace", testNamespace)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	DeferCleanup(func() {
+		cmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=false")
+		_, _ = utils.Run(cmd)
+	})
+}
+
+func createMongoDBResource(testNamespace, clusterName string) {
+	By("applying MongoDB resource " + clusterName)
+	manifestTemplate, err := template.ParseFiles(filepath.Join("..", "data", "mongodb-initializing.yaml"))
+	Expect(err).NotTo(HaveOccurred())
+	var manifest bytes.Buffer
+	Expect(manifestTemplate.Execute(&manifest, struct{ Name, Namespace string }{clusterName, testNamespace})).To(Succeed())
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = &manifest
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func createMongoDBTestResource(testNamespace, clusterName string) {
+	createMongoDBTestNamespace(testNamespace)
+	createMongoDBResource(testNamespace, clusterName)
+}
+
+func waitForMongoDBStatus(testNamespace, clusterName, phase, reason string, timeout time.Duration) {
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace,
+			"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}{\"/\"}{.status.conditions[?(@.type=='Degraded')].reason}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		if phase == "Degraded" {
+			g.Expect(output).To(Equal(phase + "/NotProgressing/" + reason))
+		} else {
+			g.Expect(output).To(Equal(phase + "/" + reason + "/NoKnownIssues"))
+		}
+	}, timeout).Should(Succeed())
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
