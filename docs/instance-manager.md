@@ -55,14 +55,16 @@ Creates the administrative user for the MongoDB instance.
 Retrieves the current MongoDB replica set topology.
 
 - **Endpoint**: `GET /v1/topology`
-- **Description**: Returns a JSON list of all members in the replica set.
+- **Description**: Returns the replica set members and each member's raw MongoDB state.
 - **Response Body**:
     ```json
     {
         "members": [
         {
             "id": 0,
-            "host": "mongodb-0.example.com:27017"
+            "host": "mongodb-0.example.com:27017",
+            "state": "PRIMARY",
+            "state_code": 1
         },
         ...
         ]
