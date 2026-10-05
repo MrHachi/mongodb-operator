@@ -6,7 +6,7 @@ This document outlines the design and architectural decisions for the MongoDB op
 
 ### MongoDB Operator
 
-The central controller that manages the lifecycle of MongoDB clusters through a reconciliation loop. It transitions the custom resource (CR) through different phases (e.g., `Initializing`, `Scaling`, `Ready`, `Degraded`).
+The central controller that manages the lifecycle of MongoDB clusters through a reconciliation loop. It transitions the custom resource (CR) through different phases (`Initializing`, `Progressing`, `Ready`, and `Degraded`). The `Progressing` condition reports the current operation through its reason and message, including the current initialization step.
 
 **Note on Pod Management**: The operator does **not** use `StatefulSets` for pod management. Instead, it manages Pods directly to allow granular control over which members are removed during scaling-in, ensuring they are not deleted while the database is in an unstable replication state.
 
@@ -43,11 +43,11 @@ This phase focuses on setting up the first primary node and the foundational clu
     - **Admin User Creation**: once the MongoDB primary is confirmed to be running in RS mode, the operator creates the admin user.
         - **Admin User Auth Attempt**: the operator attempts to authenticate by calling `POST /v1/authenticate` with the admin user's credentials on the instance manager.
         - **Execute Admin User Creation**: if `POST /v1/authenticate` returns a `401 unauthenticated` status, the operator calls `POST /v1/admin` on the instance manager with the admin user's credentials.
-- **Transition**: Upon successful completion, the CR `status.phase` is updated to `Scaling`.
+- **Transition**: After cluster bootstrap, the CR `status.phase` is updated to `Progressing`. Its `Progressing` condition uses the `ReconcilingMembers` reason while replica set members are reconciled.
 
-### 2. Scaling Phase (`status.phase = Scaling`)
+### 2. Progressing Phase (`status.phase = Progressing`)
 
-Handles the addition or removal of members from the replica set.
+Represents ongoing reconciliation after bootstrap. The `Progressing` condition reason identifies the current operation, and its message provides a human-readable summary. Future member changes will use the same condition with operation-specific reasons.
 
 ## Security & RBAC
 
