@@ -21,6 +21,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// MongoDBPhase represents a phase in the MongoDB cluster lifecycle.
+type MongoDBPhase string
+
+const (
+	PhaseInitializing MongoDBPhase = "Initializing"
+	PhaseScaling      MongoDBPhase = "Scaling"
+	PhaseReady        MongoDBPhase = "Ready"
+	PhaseDegraded     MongoDBPhase = "Degraded"
+)
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -40,7 +50,7 @@ type MongoDBSpec struct {
 type MongoDBStatus struct {
 	// Phase represents the current phase of the MongoDB cluster lifecycle
 	// Valid values are: Initializing, Scaling, Ready, Degraded
-	Phase string `json:"phase,omitempty"`
+	Phase MongoDBPhase `json:"phase,omitempty"`
 
 	// conditions represent the current state of the MongoDB resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
