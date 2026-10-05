@@ -1,0 +1,6 @@
+apiVersion: db.mrhachi.dev/v1beta1
+kind: MongoDB
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+spec: {}
