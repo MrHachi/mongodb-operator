@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -39,6 +38,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
+	controllerconfig "github.com/MrHachi/mongodb-operator/internal/controller/config"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
 )
 
@@ -51,10 +51,9 @@ const (
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
 	client.Client
-	Scheme                  *runtime.Scheme
-	KubeClient              kubeclient.Interface
-	ServiceAccountNamespace string
-	ServiceAccountName      string
+	Scheme     *runtime.Scheme
+	KubeClient kubeclient.Interface
+	Config     *controllerconfig.Config
 }
 
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs,verbs=get;list;watch;create;update;patch;delete
@@ -174,7 +173,7 @@ func (r *MongoDBReconciler) updateStatus(
 
 func (r *MongoDBReconciler) managerClientForPod(pod *corev1.Pod) *managerclient.Client {
 	managerURL := "http://" + net.JoinHostPort(pod.Status.PodIP, "8080")
-	return managerclient.New(managerURL, r.KubeClient, r.ServiceAccountNamespace, r.ServiceAccountName)
+	return managerclient.New(managerURL, r.KubeClient, r.Config.ServiceAccountNamespace, r.Config.ServiceAccountName)
 }
 
 func podReady(pod *corev1.Pod) bool {
@@ -500,6 +499,9 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Config == nil {
+		r.Config = controllerconfig.LoadConfig()
+	}
 	if r.KubeClient == nil {
 		kube, err := kubeclient.NewForConfig(mgr.GetConfig())
 		if err != nil {
@@ -507,13 +509,7 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		r.KubeClient = kube
 	}
-	if r.ServiceAccountNamespace == "" {
-		r.ServiceAccountNamespace = os.Getenv("POD_NAMESPACE")
-	}
-	if r.ServiceAccountName == "" {
-		r.ServiceAccountName = os.Getenv("SERVICE_ACCOUNT_NAME")
-	}
-	if r.ServiceAccountNamespace == "" || r.ServiceAccountName == "" {
+	if r.Config.ServiceAccountNamespace == "" || r.Config.ServiceAccountName == "" {
 		return fmt.Errorf("POD_NAMESPACE and SERVICE_ACCOUNT_NAME must be configured")
 	}
 
