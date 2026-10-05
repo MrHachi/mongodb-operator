@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net"
 
 	corev1 "k8s.io/api/core/v1"
@@ -233,61 +234,61 @@ func (r *MongoDBReconciler) labels(mongodb *dbv1beta1.MongoDB, custom ...string)
 	return labels
 }
 
-func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	secretName := fmt.Sprintf("%s-keyfile", mongodb.Name)
-	secret := &corev1.Secret{
-		Type: corev1.SecretTypeOpaque,
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: mongodb.Namespace,
-			Labels:    r.labels(mongodb),
-		},
-	}
-
-	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret)
-	if err == nil {
-		// Secret already exists, check if it has data
-		if len(secret.Data["mongodb-keyfile"]) > 0 {
-			return nil
+// ensureResource creates desired when it is absent, or reconciles the
+// operator-owned fields of the existing object and patches only when needed.
+// reconcile must preserve fields not owned by this controller.
+func ensureResource[T client.Object](ctx context.Context, c client.Client, desired T, reconcile func(existing, desired T) error) error {
+	key := client.ObjectKeyFromObject(desired)
+	existing := desired.DeepCopyObject().(T)
+	if err := c.Get(ctx, key, existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get %T %s: %w", desired, key, err)
 		}
-
-		log := logf.FromContext(ctx)
-		log.Info("Keyfile secret exists but is empty, regenerating", "name", secretName)
-
-		key, err := r.generateKeyfile()
-		if err != nil {
-			return fmt.Errorf("generate keyfile: %w", err)
-		}
-
-		if secret.Data == nil {
-			secret.Data = make(map[string][]byte)
-		}
-		secret.Data["mongodb-keyfile"] = key
-
-		if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
-			return fmt.Errorf("set owner reference on keyfile secret: %w", err)
-		}
-
-		if err := r.Update(ctx, secret); err != nil {
-			return fmt.Errorf("update keyfile secret: %w", err)
+		if err := c.Create(ctx, desired); err != nil {
+			return fmt.Errorf("create %T %s: %w", desired, key, err)
 		}
 		return nil
 	}
 
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get keyfile secret: %w", err)
+	before := existing.DeepCopyObject().(T)
+	if err := reconcile(existing, desired); err != nil {
+		return fmt.Errorf("reconcile %T: %w", existing, err)
 	}
+	if equality.Semantic.DeepEqual(before, existing) {
+		return nil
+	}
+	if err := c.Patch(ctx, existing, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("patch %T %s: %w", existing, key, err)
+	}
+	return nil
+}
 
-	// Secret doesn't exist, generate and create it
-	log := logf.FromContext(ctx)
-	log.Info("Generating keyfile secret", "name", secretName)
+func mergeDesiredLabels(existing, desired map[string]string) map[string]string {
+	if existing == nil {
+		existing = make(map[string]string)
+	}
+	maps.Copy(existing, desired)
+	return existing
+}
 
+func (r *MongoDBReconciler) reconcileOwnedMetadata(existing, desired client.Object, mongodb *dbv1beta1.MongoDB) error {
+	// This is currently reflected in memory only; we apply this via the Kubernetes API later when the reconciler calls client.Patch() as a part of ensureResource()
+	existing.SetLabels(mergeDesiredLabels(existing.GetLabels(), desired.GetLabels()))
+
+	if err := ctrl.SetControllerReference(mongodb, existing, r.Scheme); err != nil {
+		return fmt.Errorf("set controller owner reference on %T: %w", existing, err)
+	}
+	return nil
+}
+
+func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	secretName := fmt.Sprintf("%s-keyfile", mongodb.Name)
 	key, err := r.generateKeyfile()
 	if err != nil {
 		return fmt.Errorf("generate keyfile: %w", err)
 	}
 
-	secret = &corev1.Secret{
+	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: mongodb.Namespace,
@@ -302,12 +303,21 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on keyfile secret: %w", err)
 	}
-
-	if err := r.Create(ctx, secret); err != nil {
-		return fmt.Errorf("create keyfile secret: %w", err)
-	}
-
-	return nil
+	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
+		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+			return err
+		}
+		if len(existing.Data["mongodb-keyfile"]) == 0 {
+			if existing.Data == nil {
+				existing.Data = make(map[string][]byte)
+			}
+			existing.Data["mongodb-keyfile"] = key
+		}
+		if existing.Type == "" {
+			existing.Type = desired.Type
+		}
+		return nil
+	})
 }
 
 func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
@@ -340,20 +350,14 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 		},
 	}
 
-	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: mongodb.Namespace}, pvc)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get pvc: %w", err)
-	}
-
 	log.Info("Creating PVC", "name", pvcName)
 	if err := ctrl.SetControllerReference(mongodb, pvc, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on pvc: %w", err)
 	}
 
-	return r.Create(ctx, pvc)
+	return ensureResource(ctx, r.Client, pvc, func(existing, desired *corev1.PersistentVolumeClaim) error {
+		return r.reconcileOwnedMetadata(existing, desired, mongodb)
+	})
 }
 
 func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
@@ -437,36 +441,21 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 		},
 	}
 
-	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get replica pod: %w", err)
-	}
-
 	log.Info("Creating replica pod", "name", podName)
 	if err := ctrl.SetControllerReference(mongodb, pod, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on replica pod: %w", err)
 	}
 
-	return r.Create(ctx, pod)
+	return ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
+		return r.reconcileOwnedMetadata(existing, desired, mongodb)
+	})
 }
 
 func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
 	log := logf.FromContext(ctx)
 	serviceName := mongodb.Name
-	service := &corev1.Service{}
-	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: mongodb.Namespace}, service)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get headless service: %w", err)
-	}
-
 	log.Info("Creating headless service", "name", serviceName)
-	service = &corev1.Service{
+	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
 			Namespace: mongodb.Namespace,
@@ -491,10 +480,17 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 	if err := ctrl.SetControllerReference(mongodb, service, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on headless service: %w", err)
 	}
-	if err := r.Create(ctx, service); err != nil {
-		return fmt.Errorf("create headless service: %w", err)
-	}
-	return nil
+	return ensureResource(ctx, r.Client, service, func(existing, desired *corev1.Service) error {
+		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
+			return fmt.Errorf("service %s/%s is not headless (clusterIP %q); refusing unsafe in-place conversion", existing.Namespace, existing.Name, existing.Spec.ClusterIP)
+		}
+		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+			return err
+		}
+		existing.Spec.Selector = mergeDesiredLabels(existing.Spec.Selector, desired.Spec.Selector)
+		existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
+		return nil
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
