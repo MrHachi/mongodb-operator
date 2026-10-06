@@ -35,8 +35,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kubeclient "k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	controllerconfig "github.com/MrHachi/mongodb-operator/internal/controller/config"
@@ -513,7 +516,21 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&dbv1beta1.MongoDB{}).
+		For(&dbv1beta1.MongoDB{}, builder.WithPredicates(predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return true },
+			DeleteFunc:  func(event.DeleteEvent) bool { return true },
+			GenericFunc: func(event.GenericEvent) bool { return true },
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				oldMongoDB, oldOK := e.ObjectOld.(*dbv1beta1.MongoDB)
+				newMongoDB, newOK := e.ObjectNew.(*dbv1beta1.MongoDB)
+				if !oldOK || !newOK {
+					return false
+				}
+
+				return oldMongoDB.Generation != newMongoDB.Generation ||
+					oldMongoDB.Status.Phase != newMongoDB.Status.Phase
+			},
+		})).
 		Named("mongodb").
 		Complete(r)
 }
