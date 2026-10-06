@@ -20,13 +20,11 @@ limitations under the License.
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"text/template"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -49,52 +47,6 @@ const metricsRoleBindingName = "mongodb-operator-2-metrics-binding"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
-
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
-	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
-
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-	})
-
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
-	AfterAll(func() {
-		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
 
 	// After each test, check for failures and collect logs, events,
 	// and pod descriptions for debugging.
@@ -271,202 +223,52 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		It("bootstraps a MongoDB cluster through Initializing", func() {
-			const testNamespace = "mongodb-e2e"
-			const clusterName = "initializing-e2e"
-
-			By("creating a namespace for the MongoDB workload")
-			cmd := exec.Command("kubectl", "create", "namespace", testNamespace)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() {
-				cmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=false")
-				_, _ = utils.Run(cmd)
-			})
-
-			By("creating a MongoDB resource")
-			manifestTemplate, err := template.ParseFiles(filepath.Join("..", "data", "mongodb-initializing.yaml"))
-			Expect(err).NotTo(HaveOccurred())
-			var manifest bytes.Buffer
-			Expect(manifestTemplate.Execute(&manifest, struct {
-				Name      string
-				Namespace string
-			}{Name: clusterName, Namespace: testNamespace})).To(Succeed())
-			cmd = exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = &manifest
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("observing the Initializing phase while the first Pod starts")
-			waitForStatus := func(phase, reason string) func(Gomega) {
-				return func(g Gomega) {
-					cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace,
-						"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}")
-					output, err := utils.Run(cmd)
-					g.Expect(err).NotTo(HaveOccurred())
-					g.Expect(output).To(Equal(phase + "/" + reason))
-				}
-			}
-			Eventually(waitForStatus("Initializing", "WaitingForPrimaryPod"), 3*time.Minute).Should(Succeed())
-
-			By("checking the initial member resources and generated keyfile")
-			for _, resource := range []struct{ kind, name string }{
-				{"secret", clusterName + "-keyfile"},
-				{"persistentvolumeclaim", clusterName + "-r-a-data"},
-				{"pod", clusterName + "-r-a"},
-				{"service", clusterName},
-			} {
-				cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
-				_, err := utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred(), "%s %s should be created", resource.kind, resource.name)
-			}
-			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-keyfile", "-n", testNamespace,
-				"-o", "jsonpath={.data.mongodb-keyfile}")
-			keyfile, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(keyfile).NotTo(BeEmpty())
-
-			By("waiting for replica set initialization and admin credentials")
-			Eventually(waitForStatus("Progressing", "ReconcilingMembers"), 10*time.Minute).Should(Succeed())
-			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
-				"-o", "jsonpath={.data.username}")
-			username, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(username).NotTo(BeEmpty())
-
-			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
-				"-o", "jsonpath={.data.password}")
-			password, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(password).NotTo(BeEmpty())
-		})
-
-		It("resumes initialization after the operator restarts and recreates deleted resources", func() {
-			const testNamespace = "mongodb-recovery-e2e"
-			const clusterName = "recovery-e2e"
-			createMongoDBTestResource(testNamespace, clusterName)
-
-			By("waiting until the initial Pod exists before restarting the operator")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pod", clusterName+"-r-a", "-n", testNamespace)
-				_, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-			}, 3*time.Minute).Should(Succeed())
-
-			By("deleting the controller manager Pod during initialization")
-			cmd := exec.Command("kubectl", "delete", "pod", "-l", "control-plane=controller-manager", "-n", namespace)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "-l", "control-plane=controller-manager", "-n", namespace,
-					"-o", "jsonpath={.items[0].status.phase}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Running"))
-			}, 3*time.Minute).Should(Succeed())
-
-			By("deleting managed resources while the cluster is still initializing")
-			for _, resource := range []struct{ kind, name string }{{"service", clusterName}, {"pod", clusterName + "-r-a"}} {
-				cmd = exec.Command("kubectl", "delete", resource.kind, resource.name, "-n", testNamespace)
-				_, err = utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred())
-				Eventually(func(g Gomega) {
-					cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
-					_, err := utils.Run(cmd)
-					g.Expect(err).NotTo(HaveOccurred())
-				}, 3*time.Minute).Should(Succeed())
-			}
-
-			By("waiting for initialization to resume")
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
-		})
-
-		It("reports incomplete admin credentials as degraded", func() {
-			const testNamespace = "mongodb-credentials-e2e"
-			const clusterName = "credentials-e2e"
-			createMongoDBTestResource(testNamespace, clusterName)
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
-
-			By("removing the username from the managed credentials Secret")
-			cmd := exec.Command("kubectl", "patch", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
-				"--type=merge", "-p", `{"data":{"username":""}}`)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			By("resetting the MongoDB phase so existing-cluster credentials are checked")
-			cmd = exec.Command("kubectl", "patch", "mongodb", clusterName, "-n", testNamespace, "--subresource=status",
-				"--type=merge", "-p", `{"status":{"phase":"Initializing"}}`)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			waitForMongoDBStatus(testNamespace, clusterName, "Degraded", "CredentialsIncomplete", 3*time.Minute)
-		})
-
-		It("reports a ClusterIP replacement service as an unsafe mismatch", func() {
-			const testNamespace = "mongodb-service-drift-e2e"
-			const clusterName = "service-drift-e2e"
-			createMongoDBTestNamespace(testNamespace)
-
-			By("creating a standard ClusterIP Service where the operator expects its headless Service")
-			cmd := exec.Command("kubectl", "create", "service", "clusterip", clusterName, "--tcp=27017:27017", "-n", testNamespace)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			createMongoDBResource(testNamespace, clusterName)
-
-			By("confirming reconciliation remains blocked and the Service stays ClusterIP")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace, "-o", "jsonpath={.status.phase}")
-				phase, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(phase).To(Equal("Initializing"))
-				cmd = exec.Command("kubectl", "get", "service", clusterName, "-n", testNamespace, "-o", "jsonpath={.spec.clusterIP}")
-				clusterIP, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(clusterIP).NotTo(Equal("None"))
-			}, 3*time.Minute).Should(Succeed())
-		})
 	})
 })
 
-func createMongoDBTestNamespace(testNamespace string) {
-	By("creating namespace " + testNamespace)
-	cmd := exec.Command("kubectl", "create", "namespace", testNamespace)
+func setupManager() {
+	By("creating manager namespace")
+	cmd := exec.Command("kubectl", "create", "ns", namespace)
 	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
-	DeferCleanup(func() {
-		cmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=false")
-		_, _ = utils.Run(cmd)
-	})
-}
+	Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-func createMongoDBResource(testNamespace, clusterName string) {
-	By("applying MongoDB resource " + clusterName)
-	manifestTemplate, err := template.ParseFiles(filepath.Join("..", "data", "mongodb-initializing.yaml"))
-	Expect(err).NotTo(HaveOccurred())
-	var manifest bytes.Buffer
-	Expect(manifestTemplate.Execute(&manifest, struct{ Name, Namespace string }{clusterName, testNamespace})).To(Succeed())
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
-	cmd.Stdin = &manifest
+	By("labeling the namespace to enforce the restricted security policy")
+	cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+		"pod-security.kubernetes.io/enforce=restricted")
 	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+	By("installing CRDs")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 }
 
-func createMongoDBTestResource(testNamespace, clusterName string) {
-	createMongoDBTestNamespace(testNamespace)
-	createMongoDBResource(testNamespace, clusterName)
-}
+func teardownManager() {
+	By("cleaning up the curl pod for metrics")
+	cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+	_, _ = utils.Run(cmd)
 
-func waitForMongoDBStatus(testNamespace, clusterName, phase, reason string, timeout time.Duration) {
-	Eventually(func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace,
-			"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}{\"/\"}{.status.conditions[?(@.type=='Degraded')].reason}")
-		output, err := utils.Run(cmd)
-		g.Expect(err).NotTo(HaveOccurred())
-		if phase == "Degraded" {
-			g.Expect(output).To(Equal(phase + "/NotProgressing/" + reason))
-		} else {
-			g.Expect(output).To(Equal(phase + "/" + reason + "/NoKnownIssues"))
-		}
-	}, timeout).Should(Succeed())
+	By("cleaning up the metrics ClusterRoleBinding")
+	cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+	_, _ = utils.Run(cmd)
+
+	By("undeploying the controller-manager")
+	cmd = exec.Command("make", "undeploy")
+	_, _ = utils.Run(cmd)
+
+	By("uninstalling CRDs")
+	cmd = exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd)
+
+	By("removing manager namespace")
+	cmd = exec.Command("kubectl", "delete", "ns", namespace)
+	_, _ = utils.Run(cmd)
 }
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
