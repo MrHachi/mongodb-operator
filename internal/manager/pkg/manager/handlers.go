@@ -56,6 +56,22 @@ func (m *InstanceManager) RequirePermission(verb, group, resource string) func(h
 	}
 }
 
+func (m *InstanceManager) HandleLivez(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *InstanceManager) HandleReadyz(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	if client == nil || client.Ping(r.Context()) != nil {
+		http.Error(w, "MongoDB is not ready", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Request) {
 	var req AuthenticationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
