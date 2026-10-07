@@ -33,7 +33,9 @@ import (
 
 var (
 	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "example.com/mongodb-operator-2:v0.0.1"
+	managerImage = "ghcr.io/mrhachi/mongodb-operator-2:v0.0.1"
+	// instanceManagerImage is the instance-manager image to be built and loaded for testing.
+	instanceManagerImage = "ghcr.io/mrhachi/mongodb-instance-manager:v0.1"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -52,15 +54,17 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
+	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage), fmt.Sprintf("IMGR_IMG=%s", instanceManagerImage))
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind,
-	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+
+	By("loading the instance-manager image on Kind")
+	err = utils.LoadImageToKindClusterWithName(instanceManagerImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the instance-manager image into Kind")
 
 	configureKubectlKubeRC()
 	setupCertManager()

@@ -28,6 +28,7 @@ The MongoDB watch enqueues reconciliation for resource creation and deletion, sp
 
 This phase focuses on setting up the first primary node and the foundational cluster infrastructure.
 
+- Before contacting any instance-manager, the operator creates a ClusterRoleBinding granting the namespace's `default` ServiceAccount permission to create TokenReviews and SubjectAccessReviews. A finalizer removes this cluster-scoped binding when the MongoDB resource is deleted.
 - Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. If managed Pods exist but no primary is reported, the cluster moves to `Degraded` and recovery reconciliation retries discovery. A fresh `-r-a` member is created only when no managed Pods are found.
 
 - **Resource Provisioning**:
@@ -56,7 +57,7 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
 1.  **Infrastructure Reconciliation**: Ensures all foundational Kubernetes resources exist and are correct:
     - Headless Service for intra-cluster discovery.
     - Keyfile Secret and connection ConfigMaps.
-    - Necessary RBAC resources.
+    - A ClusterRoleBinding that grants the MongoDB Pod's namespace `default` ServiceAccount `create` on TokenReviews and SubjectAccessReviews. A MongoDB finalizer removes the binding when the resource is deleted.
 2.  **Scaling Logic**:
     - **Scale-In (Culling)**:
         1.  Identify candidates for removal by selecting members with the lowest replication lag (must be under the configured `drainThreshold`).
@@ -93,8 +94,8 @@ Security is implemented via Kubernetes RBAC and sidecar-based authentication.
 
 ### RBAC Requirements
 
-- **Operator ServiceAccount**: Requires `create` permission on its own `serviceaccounts/token` resource, and `create` / `get` permission for `db.mrhachi.dev` group, `mongodbs` resource.
-- **DB Pod ServiceAccount**: Requires `create` permission for `tokenreviews` and `subjectaccessreviews` (to allow the sidecar to perform identity verification).
+- **Operator ServiceAccount**: Requires `create` permission on its own `serviceaccounts/token` resource, `create` / `get` permission for `db.mrhachi.dev` group, `mongodbs` resource, and `get` / `create` / `update` / `delete` permission for the per-MongoDB ClusterRoleBindings it reconciles.
+- **DB Pod ServiceAccount**: The operator binds the namespace `default` ServiceAccount to a ClusterRole with `create` permission for `tokenreviews` and `subjectaccessreviews`, allowing the sidecar to verify identity and authorization. This requires cluster-scoped RBAC.
 
 ## Naming & Labeling
 
