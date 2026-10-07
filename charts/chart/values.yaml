@@ -109,7 +109,7 @@ manager:
 rbac:
   ## RBAC resource scope
   ## - false (default): ClusterRole/ClusterRoleBinding (all namespaces)
-  ## - true: Role/RoleBinding (release namespace only)
+  ## - true: Role/RoleBinding (release namespace only; unsupported because the sidecar requires cluster-scoped review permissions)
   ##
   namespaced: false
 
@@ -183,4 +183,3 @@ prometheus:
 ##
 networkPolicy:
   enabled: false
-

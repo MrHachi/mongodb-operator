@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,6 +28,7 @@ import (
 	"net"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
@@ -49,9 +52,10 @@ import (
 )
 
 const (
-	adminUsernameKey  = "username"
-	adminPasswordKey  = "password"
-	keyfileVolumeName = "keyfile"
+	adminUsernameKey             = "username"
+	adminPasswordKey             = "password"
+	keyfileVolumeName            = "keyfile"
+	instanceManagerRBACFinalizer = "db.mrhachi.dev/instance-manager-rbac"
 )
 
 var (
@@ -77,7 +81,8 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,resourceNames=controller-manager,verbs=create
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,resourceNames=mongodb-operator-2-controller-manager,verbs=create
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -101,6 +106,27 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	mongodb := &dbv1beta1.MongoDB{}
 	if err := r.Get(ctx, req.NamespacedName, mongodb); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if mongodb.DeletionTimestamp != nil {
+		if containsFinalizer(mongodb.Finalizers, instanceManagerRBACFinalizer) {
+			if err := r.deleteInstanceManagerBinding(ctx, mongodb); err != nil {
+				return ctrl.Result{}, err
+			}
+			before := mongodb.DeepCopy()
+			mongodb.Finalizers = removeFinalizer(mongodb.Finalizers, instanceManagerRBACFinalizer)
+			if err := r.Patch(ctx, mongodb, client.MergeFrom(before)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("remove instance-manager RBAC finalizer: %w", err)
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+	if !containsFinalizer(mongodb.Finalizers, instanceManagerRBACFinalizer) {
+		before := mongodb.DeepCopy()
+		mongodb.Finalizers = append(mongodb.Finalizers, instanceManagerRBACFinalizer)
+		if err := r.Patch(ctx, mongodb, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add instance-manager RBAC finalizer: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	switch mongodb.Status.Phase {
@@ -141,6 +167,83 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 		return ctrl.Result{}, nil
 	}
+}
+
+func containsFinalizer(finalizers []string, finalizer string) bool {
+	for _, existing := range finalizers {
+		if existing == finalizer {
+			return true
+		}
+	}
+	return false
+}
+
+func removeFinalizer(finalizers []string, finalizer string) []string {
+	remaining := finalizers[:0]
+	for _, existing := range finalizers {
+		if existing != finalizer {
+			remaining = append(remaining, existing)
+		}
+	}
+	return remaining
+}
+
+func instanceManagerBindingName(mongodb *dbv1beta1.MongoDB) string {
+	sum := sha256.Sum256([]byte(mongodb.Namespace + "/" + mongodb.Name))
+	return "mongodb-instance-manager-" + hex.EncodeToString(sum[:12])
+}
+
+func (r *MongoDBReconciler) ensureInstanceManagerBinding(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	if r.KubeClient == nil {
+		return fmt.Errorf("kubernetes client is not configured")
+	}
+	if r.Config == nil || r.Config.InstanceManagerRoleName == "" {
+		return fmt.Errorf("instance-manager auth ClusterRole name is not configured")
+	}
+
+	bindings := r.KubeClient.RbacV1().ClusterRoleBindings()
+	name := instanceManagerBindingName(mongodb)
+	desired := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "mongodb-operator",
+				"db.mrhachi.dev/namespace":     mongodb.Namespace,
+			},
+		},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: r.Config.InstanceManagerRoleName},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "default", Namespace: mongodb.Namespace}},
+	}
+	existing, err := bindings.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := bindings.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create instance-manager ClusterRoleBinding: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get instance-manager ClusterRoleBinding: %w", err)
+	}
+	if existing.RoleRef != desired.RoleRef {
+		return fmt.Errorf("instance-manager ClusterRoleBinding %q references unexpected role %q", name, existing.RoleRef.Name)
+	}
+	if !equality.Semantic.DeepEqual(existing.Subjects, desired.Subjects) {
+		existing.Subjects = desired.Subjects
+		if _, err := bindings.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update instance-manager ClusterRoleBinding subjects: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *MongoDBReconciler) deleteInstanceManagerBinding(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	if r.KubeClient == nil {
+		return fmt.Errorf("kubernetes client is not configured")
+	}
+	if err := r.KubeClient.RbacV1().ClusterRoleBindings().Delete(ctx, instanceManagerBindingName(mongodb), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete instance-manager ClusterRoleBinding: %w", err)
+	}
+	return nil
 }
 
 func (r *MongoDBReconciler) setProgressingStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, phase dbv1beta1.MongoDBPhase, reason dbv1beta1.ProgressReason) error {
@@ -353,7 +456,7 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
 			return err
 		}
-		if len(existing.Data["mongodb-keyfile"]) == 0 {
+		if !validKeyfile(existing.Data["mongodb-keyfile"]) {
 			if existing.Data == nil {
 				existing.Data = make(map[string][]byte)
 			}
@@ -367,11 +470,23 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 }
 
 func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
-	key := make([]byte, 1024)
+	// MongoDB keyfiles accept base64 characters and must be no longer than
+	// 1024 characters. 756 random bytes encode to 1008 base64 characters.
+	key := make([]byte, 756)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	return key, nil
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(key)))
+	base64.StdEncoding.Encode(encoded, key)
+	return encoded, nil
+}
+
+func validKeyfile(key []byte) bool {
+	if len(key) < 6 || len(key) > 1024 {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(string(key))
+	return err == nil
 }
 
 func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
@@ -425,15 +540,29 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			Hostname:      podName,
 			Subdomain:     mongodb.Name,
 			RestartPolicy: corev1.RestartPolicyAlways,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot: new(true),
+				RunAsUser:    new(int64(999)),
+				RunAsGroup:   new(int64(999)),
+				FSGroup:      new(int64(999)),
+			},
 			InitContainers: []corev1.Container{
 				{
-					Name:    "setup-keyfile",
-					Image:   "mongo:latest",
-					Command: []string{"sh", "-c", "chown 999:999 /data/configdb/mongodb.key && chmod 0600 /data/configdb/mongodb.key"},
+					Name:  "setup-keyfile",
+					Image: "mongo:latest",
+					Command: []string{
+						"sh",
+						"-c",
+						"cp /etc/secret/mongodb.key /etc/keyfile/mongodb.key && chown 999:999 /etc/keyfile/mongodb.key && chmod 0600 /etc/keyfile/mongodb.key",
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
+							Name:      keyfileVolumeName + "-secret",
+							MountPath: "/etc/secret",
+						},
+						{
 							Name:      keyfileVolumeName,
-							MountPath: "/data/configdb",
+							MountPath: "/etc/keyfile",
 						},
 					},
 				},
@@ -470,7 +599,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 					Image: "mongo:latest",
 					Args: []string{
 						"--replSet", mongodb.Name,
-						"--clusterAuthMode", "keyFile", "--keyFile", "/data/configdb/mongodb.key",
+						"--clusterAuthMode", "keyFile", "--keyFile", "/etc/keyfile/mongodb.key",
 						"--bind_ip_all",
 					},
 					StartupProbe: &corev1.Probe{
@@ -490,18 +619,25 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 						},
 						{
 							Name:      keyfileVolumeName,
-							MountPath: "/data/configdb",
+							MountPath: "/etc/keyfile",
 						},
 					},
 				},
 			},
 			Volumes: []corev1.Volume{
 				{
-					Name: keyfileVolumeName,
+					Name: keyfileVolumeName + "-secret",
 					VolumeSource: corev1.VolumeSource{
 						Secret: &corev1.SecretVolumeSource{
 							SecretName: fmt.Sprintf("%s-keyfile", mongodb.Name),
+							Items:      []corev1.KeyToPath{{Key: "mongodb-keyfile", Path: "mongodb.key"}},
 						},
+					},
+				},
+				{
+					Name: keyfileVolumeName,
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
 				},
 				{
@@ -521,6 +657,31 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 		return fmt.Errorf("set owner reference on replica pod: %w", err)
 	}
 
+	existing := &corev1.Pod{}
+	key := client.ObjectKeyFromObject(pod)
+	if err := r.Get(ctx, key, existing); err == nil {
+		needsReplacement := len(existing.Spec.InitContainers) == 0 ||
+			!equality.Semantic.DeepEqual(existing.Spec.InitContainers[0].Command, pod.Spec.InitContainers[0].Command)
+		if !needsReplacement {
+			needsReplacement = true
+			for _, volume := range existing.Spec.Volumes {
+				if volume.Name == keyfileVolumeName+"-secret" && volume.Secret != nil && len(volume.Secret.Items) == 1 &&
+					volume.Secret.Items[0].Key == "mongodb-keyfile" && volume.Secret.Items[0].Path == "mongodb.key" {
+					needsReplacement = false
+					break
+				}
+			}
+		}
+		if needsReplacement {
+			log.Info("Replacing replica Pod to update keyfile setup", "name", podName)
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete outdated replica pod: %w", err)
+			}
+			return nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get replica pod: %w", err)
+	}
 	return ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
 		return r.reconcileOwnedMetadata(existing, desired, mongodb)
 	})
@@ -582,6 +743,9 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Config.ServiceAccountNamespace == "" || r.Config.ServiceAccountName == "" {
 		return fmt.Errorf("POD_NAMESPACE and SERVICE_ACCOUNT_NAME must be configured")
+	}
+	if r.Config.InstanceManagerRoleName == "" {
+		return fmt.Errorf("INSTANCE_MANAGER_AUTH_ROLE_NAME must be configured")
 	}
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()

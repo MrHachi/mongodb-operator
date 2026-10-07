@@ -9,6 +9,7 @@ resources:
 - role_binding.yaml
 - leader_election_role.yaml
 - leader_election_role_binding.yaml
+- instance_manager_auth_role.yaml
 # The following RBAC configurations are used to protect
 # the metrics endpoint with authn/authz. These configurations
 # ensure that only authorized users and service accounts
@@ -25,4 +26,3 @@ resources:
 - mongodb_admin_role.yaml
 - mongodb_editor_role.yaml
 - mongodb_viewer_role.yaml
-

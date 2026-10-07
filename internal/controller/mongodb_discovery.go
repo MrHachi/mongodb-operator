@@ -39,6 +39,7 @@ const (
 	discoveryPrimaryFound
 	discoveryPodsWithoutPrimary
 	discoveryPodsUnreachable
+	discoveryPodsNotReady
 )
 
 type primaryDiscovery struct {
@@ -46,7 +47,17 @@ type primaryDiscovery struct {
 	Primary *corev1.Pod
 }
 
-// discoverPrimary finds the managed Pod corresponding to a PRIMARY member.
+// discoverPrimary inspects managed Pods and returns one of these states:
+//   - discoveryNoPods: no managed Pods exist.
+//   - discoveryBootstrapPod: the sole managed Pod is the initial -r-a member
+//     and its instance-manager reports that the replica set is not initialized.
+//   - discoveryPrimaryFound: an instance-manager reports a PRIMARY member, and
+//     its host matches a managed Pod.
+//   - discoveryPodsWithoutPrimary: at least one instance-manager responded, but
+//     none reported a PRIMARY member.
+//   - discoveryPodsUnreachable: a Ready Pod with an IP exists, but no
+//     instance-manager endpoint responded.
+//   - discoveryPodsNotReady: managed Pods exist, but none are Ready with an IP.
 func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1beta1.MongoDB) (primaryDiscovery, error) {
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList, client.InNamespace(mongodb.Namespace), client.MatchingLabels(r.labels(mongodb))); err != nil {
@@ -72,11 +83,13 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 
 	var uninitializedPods []corev1.Pod
 	endpointResponded := false
+	readyPods := 0
 	for i := range managedPods {
 		pod := &managedPods[i]
 		if pod.Status.PodIP == "" || !podReady(pod) {
 			continue
 		}
+		readyPods++
 		manager := r.managerClientForPod(pod)
 		topology, err := manager.GetTopology(ctx)
 		if err != nil {
@@ -100,6 +113,9 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 		return primaryDiscovery{State: discoveryBootstrapPod, Primary: &uninitializedPods[0]}, nil
 	}
 	if !endpointResponded {
+		if readyPods == 0 {
+			return primaryDiscovery{State: discoveryPodsNotReady}, nil
+		}
 		return primaryDiscovery{State: discoveryPodsUnreachable}, nil
 	}
 	return primaryDiscovery{State: discoveryPodsWithoutPrimary}, nil

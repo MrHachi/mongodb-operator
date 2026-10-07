@@ -1,3 +1,6 @@
+{{- if .Values.rbac.namespaced }}
+{{- fail "rbac.namespaced=true is incompatible with instance-manager TokenReview and SubjectAccessReview permissions; use cluster-scoped RBAC" }}
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 {{- if .Values.rbac.namespaced }}
 kind: Role
@@ -10,6 +13,15 @@ metadata:
 {{- end }}
   name: {{ include "mongodb-operator-2.resourceName" (dict "suffix" "manager-role" "context" $) }}
 rules:
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - update
 - apiGroups:
   - ""
   resources:
