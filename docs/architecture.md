@@ -6,7 +6,7 @@ This document outlines the design and architectural decisions for the MongoDB op
 
 ### MongoDB Operator
 
-The central controller that manages the lifecycle of MongoDB clusters through a reconciliation loop. It transitions the custom resource (CR) through different phases (`Initializing`, `Progressing`, `Ready`, and `Degraded`). The `Progressing` condition reports the current operation through its reason and message, including the current initialization step.
+The central controller that manages the lifecycle of MongoDB clusters through a reconciliation loop. It transitions the custom resource (CR) through different phases (`Initializing`, `Progressing`, or `Ready`). The `Progressing` condition reports the current operation through its reason and message, including the current initialization step.
 
 **Note on Pod Management**: The operator does **not** use `StatefulSets` for pod management. Instead, it manages Pods directly to allow granular control over which members are removed during scaling-in, ensuring they are not deleted while the database is in an unstable replication state.
 
@@ -29,7 +29,7 @@ The MongoDB watch enqueues reconciliation for resource creation and deletion, sp
 This phase focuses on setting up the first primary node and the foundational cluster infrastructure.
 
 - Before contacting any instance-manager, the operator creates a ClusterRoleBinding granting the namespace's `default` ServiceAccount permission to create TokenReviews and SubjectAccessReviews. A finalizer removes this cluster-scoped binding when the MongoDB resource is deleted.
-- Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. If managed Pods exist but no primary is reported, the cluster moves to `Degraded` and recovery reconciliation retries discovery. A fresh `-r-a` member is created only when no managed Pods are found.
+- Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. If managed Pods exist but no primary is reported, the cluster moves to a `Degraded` status condition and recovery reconciliation retries discovery. A fresh `-r-a` member is created only when no managed Pods are found.
 
 - **Resource Provisioning**:
     - **Keyfile**: Generates a secure keyfile and stores it in a Kubernetes `Secret`.
@@ -77,7 +77,7 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
     - The cluster is considered "Stable" when at least $n/2+1$ members are in a voting state (`PRIMARY` or `SECONDARY`).
     - The operator waits for this quorum to persist for a configured number of consecutive minutes.
 
-**Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. Any failure to reach quorum or unexpected member crashes will transition the cluster to `Degraded`.
+**Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. Any failure to reach quorum or unexpected member crashes will set the `Degraded` status condition to `True`.
 
 **Note**: Container image version updates and scale-to-zero remain open problems for future development.
 

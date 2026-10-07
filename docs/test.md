@@ -25,10 +25,10 @@ The `Initializing` phase is the most critical for cluster bootstrapping. Tests i
 - **Scenario**: A managed resource (e.g., the Primary Pod or the Headless Service) is deleted manually via `kubectl delete`.
 - **Expected Outcome**: The operator detects the missing resource during the next reconciliation loop and recreates it, eventually completing the initialization.
 
-### 4. Error Handling & Degraded States
+### 4. Error Handling & Status Conditions
 
 - **Scenario**: A required resource is present but invalid (e.g., the Keyfile Secret exists but contains no data).
-- **Expected Outcome**: The operator transitions the CR to the `Degraded` state with a specific, actionable `Reason` and `Message` (e.g., `ReasonCredentialsIncomplete`).
+- **Expected Outcome**: The operator sets the `Degraded` status condition to `True` with a specific, actionable `Reason` and `Message` (e.g., `ReasonCredentialsIncomplete`).
 
 #### 5. Service Type Mismatch (Drift)
 
