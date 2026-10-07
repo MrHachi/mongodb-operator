@@ -28,7 +28,6 @@ const (
 	PhaseInitializing MongoDBPhase = "Initializing"
 	PhaseProgressing  MongoDBPhase = "Progressing"
 	PhaseReady        MongoDBPhase = "Ready"
-	PhaseDegraded     MongoDBPhase = "Degraded"
 )
 
 const (
@@ -95,12 +94,13 @@ type MongoDBSpec struct {
 // MongoDBStatus defines the observed state of MongoDB.
 type MongoDBStatus struct {
 	// Phase represents the current phase of the MongoDB cluster lifecycle
-	// Valid values are: Initializing, Progressing, Ready, Degraded
+	// Valid values are: Initializing, Progressing, Ready
 	Phase MongoDBPhase `json:"phase,omitempty"`
 
 	// Conditions represent the observed state of the MongoDB resource. The operator
-	// maintains Ready, Progressing, and Degraded conditions. While work is underway,
-	// Progressing is True and its Reason identifies the current operation.
+	// maintains Ready, Progressing, and Degraded conditions. Progressing is True
+	// while reconciliation is working toward the desired state, including recovery
+	// from a problem, and its Reason identifies the current operation or problem.
 	// Degraded is reserved for observed cluster problems that block the desired state.
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
