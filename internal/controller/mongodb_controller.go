@@ -246,13 +246,11 @@ func (r *MongoDBReconciler) transitionProgressing(ctx context.Context, mongodb *
 	return r.updateStatus(ctx, mongodb, phase, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonProgressing, Message: "MongoDB cluster is not ready"},
 		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: string(reason), Message: message},
-		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
 	})
 }
 
 func (r *MongoDBReconciler) setDegradedStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) error {
 	return r.updateStatus(ctx, mongodb, mongodb.Status.Phase, []metav1.Condition{
-		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: reason, Message: "Reconciliation is working to recover from a cluster problem"},
 		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: message},
 	})
 }
@@ -261,7 +259,6 @@ func (r *MongoDBReconciler) transitionReady(ctx context.Context, mongodb *dbv1be
 	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseReady, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionTrue, Reason: dbv1beta1.ReasonReady, Message: "MongoDB cluster is ready"},
 		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNotProgressing, Message: "No changes are in progress"},
-		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
 	})
 }
 
