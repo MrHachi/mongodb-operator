@@ -27,7 +27,11 @@ type Client struct {
 }
 
 func NewClient(ctx context.Context, uri string) (*Client, error) {
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	client, err := mongo.Connect(ctx,
+		options.Client().
+			ApplyURI(uri).
+			SetDirect(true), // connect directly to the instance when using the localhost client
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to mongodb: %w", err)
 	}
@@ -82,14 +86,16 @@ func (c *Client) InitiateReplicaSet(ctx context.Context, rsName, host string) er
 	// This operation requires the admin DB
 	db := c.client.Database("admin")
 
-	command := bson.D{
+	config := bson.D{
 		{Key: "_id", Value: rsName},
 		{Key: "members", Value: bson.A{
 			bson.D{{Key: "_id", Value: 0}, {Key: "host", Value: host}},
 		}},
 	}
 
-	err := db.RunCommand(ctx, command).Err()
+	err := db.RunCommand(ctx, bson.D{
+		{Key: "replSetInitiate", Value: config},
+	}).Err()
 	if err != nil {
 		return fmt.Errorf("initiate replica set: %w", err)
 	}
