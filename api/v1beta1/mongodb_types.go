@@ -47,6 +47,9 @@ const (
 	ReasonCredentialsMissing         = "CredentialsMissing"
 	ReasonCredentialsIncomplete      = "CredentialsIncomplete"
 	ReasonReplicaSetUninitialized    = "ReplicaSetUninitialized"
+	ReasonResourceOwnershipConflict   = "ResourceOwnershipConflict"
+	ReasonKeyfileRotationBlocked      = "KeyfileRotationBlocked"
+	ReasonServiceNotHeadless          = "ServiceNotHeadless"
 )
 
 // ProgressReason identifies the current operation reported by the Progressing condition.
