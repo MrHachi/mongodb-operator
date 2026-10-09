@@ -24,7 +24,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"slices"
 
@@ -388,33 +387,40 @@ func ensureResource[T client.Object](ctx context.Context, c client.Client, desir
 	}
 
 	before := existing.DeepCopyObject().(T)
+
+	// Check ownership
+	expectedOwner, actualOwner := metav1.GetControllerOf(desired), metav1.GetControllerOf(existing)
+	if expectedOwner == nil {
+		return fmt.Errorf("check ownership of %T %s: desired object has no controller owner reference", existing, key)
+	}
+	if actualOwner == nil {
+		return fmt.Errorf("check ownership of %T %s: existing object has no controller owner reference; refusing to adopt it", existing, key)
+	}
+	// Fail if we can't determine that we own the resource
+	if actualOwner.APIVersion != expectedOwner.APIVersion ||
+		actualOwner.Kind != expectedOwner.Kind ||
+		actualOwner.Name != expectedOwner.Name ||
+		actualOwner.UID != expectedOwner.UID {
+		return fmt.Errorf("check ownership of %T %s: existing object is controlled by %s %q, expected %s %q", existing, key, actualOwner.Kind, actualOwner.Name, expectedOwner.Kind, expectedOwner.Name)
+	}
+
 	if err := reconcile(existing, desired); err != nil {
 		return fmt.Errorf("reconcile %T: %w", existing, err)
 	}
 	if equality.Semantic.DeepEqual(before, existing) {
 		return nil
 	}
+
 	if err := c.Patch(ctx, existing, client.MergeFrom(before)); err != nil {
 		return fmt.Errorf("patch %T %s: %w", existing, key, err)
 	}
 	return nil
 }
 
-func mergeDesiredLabels(existing, desired map[string]string) map[string]string {
-	if existing == nil {
-		existing = make(map[string]string)
-	}
-	maps.Copy(existing, desired)
-	return existing
-}
-
-func (r *MongoDBReconciler) reconcileOwnedMetadata(existing, desired client.Object, mongodb *dbv1beta1.MongoDB) error {
+func (r *MongoDBReconciler) reconcileOwnedMetadata(existing, desired client.Object) error {
 	// This is currently reflected in memory only; we apply this via the Kubernetes API later when the reconciler calls client.Patch() as a part of ensureResource()
-	existing.SetLabels(mergeDesiredLabels(existing.GetLabels(), desired.GetLabels()))
+	existing.SetLabels(desired.GetLabels())
 
-	if err := ctrl.SetControllerReference(mongodb, existing, r.Scheme); err != nil {
-		return fmt.Errorf("set controller owner reference on %T: %w", existing, err)
-	}
 	return nil
 }
 
@@ -441,7 +447,7 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 		return fmt.Errorf("set owner reference on keyfile secret: %w", err)
 	}
 	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
-		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
 			return err
 		}
 		if !validKeyfile(existing.Data["mongodb-keyfile"]) {
@@ -508,7 +514,7 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 	}
 
 	return ensureResource(ctx, r.Client, pvc, func(existing, desired *corev1.PersistentVolumeClaim) error {
-		return r.reconcileOwnedMetadata(existing, desired, mongodb)
+		return r.reconcileOwnedMetadata(existing, desired)
 	})
 }
 
@@ -671,7 +677,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 		return fmt.Errorf("get replica pod: %w", err)
 	}
 	return ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
-		return r.reconcileOwnedMetadata(existing, desired, mongodb)
+		return r.reconcileOwnedMetadata(existing, desired)
 	})
 }
 
@@ -708,10 +714,10 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
 			return fmt.Errorf("service %s/%s is not headless (clusterIP %q); refusing unsafe in-place conversion", existing.Namespace, existing.Name, existing.Spec.ClusterIP)
 		}
-		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
 			return err
 		}
-		existing.Spec.Selector = mergeDesiredLabels(existing.Spec.Selector, desired.Spec.Selector)
+		existing.Spec.Selector = desired.Spec.Selector
 		existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
 		return nil
 	})
