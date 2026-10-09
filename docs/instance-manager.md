@@ -12,6 +12,11 @@ GHCR repository tag: `ghcr.io/mrhachi/mongodb-instance-manager`
   `Authorization: Bearer <token>`. The operator requests this token for the `db.mrhachi.dev/mongodb/instance-manager` audience.
 - **Authorization scope**: The sidecar checks permissions in the MongoDB namespace configured through `MONGODB_NAMESPACE`; callers do not provide a namespace header.
 
+### Health Monitoring & Reporting
+
+- **Responsibility**: The instance-manager monitors MongoDB cluster health (e.g., replication lag, primary availability) and reports findings to the MongoDB CR status subresource.
+- **Leadership Election**: To ensure a single source of truth and prevent competing writes to the CR status, instance managers use Kubernetes Leases to elect a single reporting leader. Only the elected leader publishes cluster-level health conditions.
+
 ### Security Enforcement
 
 The sidecar verifies the operator's identity using the Kubernetes API. It performs a `TokenReview` and `SubjectAccessReview` against the Kubernetes API.
