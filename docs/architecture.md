@@ -23,6 +23,12 @@ A Go-based service (using the Chi router) deployed as a sidecar container within
 
 The reconciliation loop follows a state-machine approach to ensure the desired state is reached.
 
+The reconciliation flow follows these steps:
+
+1.  **Degradation Recovery**: Attempt recovery based on status conditions found on the MongoDB CR.
+2.  **Main Reconciliation**: If degradation recovery is successful, or if it is unsuccessful but the cluster is still eligible to proceed, the operator proceeds to the main reconciliation, which branches based on the current `status.phase`.
+3.  **Status Evaluation**: Always evaluate and update operator-owned status conditions (presently `Ready` and `Progressing`) to reflect the current state of the cluster.
+
 The MongoDB watch enqueues reconciliation for resource creation and deletion, spec changes, and changes to `status.phase`. Status updates that only change `status.conditions` do not enqueue reconciliation; conditions report state and progress but do not drive the state machine. Before writing status, the controller fetches the latest resource and retries on resource-version conflicts. It only applies the write if the resource's generation still matches the one observed at the start of reconciliation; otherwise it stops and immediately requeues to process the new spec.
 
 ### 1. Initialization Phase (`status.phase = Initializing`)
