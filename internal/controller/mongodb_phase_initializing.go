@@ -82,20 +82,18 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		// and move on to reconciling the discovered primary node
 		pod = discovery.Primary
 	case discoveryPodsNotReady:
-		log.Info("Waiting for managed Pods to become ready", "name", mongodb.Name)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), "Waiting for managed Pods to become ready", 15*time.Second)
 	case discoveryPodsUnreachable:
-		// If we have unreachable nodes, this constitutes an error mode and we transition to Degraded state after ensuring
-		// the headless service is properly set up
+		// Ensure discovery networking before waiting for instance-manager endpoints.
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
-		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable")
+		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable", 15*time.Second)
 	case discoveryPodsWithoutPrimary:
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
-		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available")
+		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available", 15*time.Second)
 	default:
 		return ctrl.Result{}, fmt.Errorf("discover replica set primary: unexpected discovery state %d", discovery.State)
 	}
@@ -146,11 +144,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 
 	podName := pod.Name
 	if !podReady(pod) || pod.Status.PodIP == "" {
-		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonWaitingForPod); err != nil {
-			return ctrl.Result{}, err
-		}
-		log.Info("Waiting for primary pod to become ready", "name", podName)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), fmt.Sprintf("Waiting for primary Pod %s to become ready", podName), 15*time.Second)
 	}
 
 	managerClient := r.managerClientForPod(pod)
@@ -181,7 +175,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
 	}
 	if !topologyHasPrimary(topology) {
-		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Replica set reports no PRIMARY member")
+		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Replica set reports no PRIMARY member", 15*time.Second)
 	}
 
 	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingAdminUser); err != nil {
