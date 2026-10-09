@@ -44,9 +44,9 @@ The MongoDB container has a TCP startup probe on port `27017` with a five-minute
 
 ### Status conditions (`status.conditions`)
 
-| Condition           | Type   | Description                                                                                                                                                                          |
-| :------------------ | :----- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Ready`             | `bool` | Flag indicating whether the MongoDB cluster is eligible to serve applications.                                                                                                       |
-| `Progressing`       | `bool` | Flag indicating whether reconciliation is currently proceeding.                                                                                                                      |
-| `NeedsIntervention` | `bool` | Flag indicating that manual administrator intervention is required to alleviate service degradation.                                                                                 |
-| `Degraded`          | `bool` | Flag indicating that the actual state cannot be reconciled with the desired state for the API surface owned by the operator. Note that a cluster can be both `Degraded` and `Ready`. |
+| Condition           | Type   | Description                                                                                                                                                                                                                    |
+| :------------------ | :----- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Ready`             | `bool` | Flag indicating whether the MongoDB cluster is eligible to serve applications.                                                                                                                                                 |
+| `Progressing`       | `bool` | Flag indicating whether reconciliation is currently proceeding.                                                                                                                                                                |
+| `NeedsIntervention` | `bool` | Flag indicating that manual administrator intervention is required to alleviate service degradation.                                                                                                                           |
+| `Degraded`          | `bool` | Flag indicating that the cluster is experiencing health degradation (e.g., replication lag, primary unavailability), as observed and reported by the instance manager. Note that a cluster can be both `Degraded` and `Ready`. |
