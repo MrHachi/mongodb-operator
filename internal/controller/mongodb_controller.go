@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -94,16 +95,27 @@ type MongoDBReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
 func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
+	mongodb := &dbv1beta1.MongoDB{}
 	defer func() {
 		if errors.Is(reconcileErr, errObservedGenerationChanged) {
 			result = ctrl.Result{Requeue: true}
+			reconcileErr = nil
+			return
+		}
+
+		if blocked, ok := errors.AsType[*ReconciliationError](reconcileErr); ok {
+			if err := r.setReconciliationErrorStatus(ctx, mongodb, blocked); err != nil {
+				reconcileErr = fmt.Errorf("record reconciliation error status: %w", err)
+				return
+			}
+			logf.FromContext(ctx).Info("Reconciliation is blocked", "name", mongodb.Name, "reason", blocked.Reason, "message", blocked.Message)
+			result = ctrl.Result{RequeueAfter: 15 * time.Second}
 			reconcileErr = nil
 		}
 	}()
 
 	log := logf.FromContext(ctx)
 
-	mongodb := &dbv1beta1.MongoDB{}
 	if err := r.Get(ctx, req.NamespacedName, mongodb); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -394,14 +406,25 @@ func ensureResource[T client.Object](ctx context.Context, c client.Client, desir
 		return fmt.Errorf("check ownership of %T %s: desired object has no controller owner reference", existing, key)
 	}
 	if actualOwner == nil {
-		return fmt.Errorf("check ownership of %T %s: existing object has no controller owner reference; refusing to adopt it", existing, key)
+		return &ReconciliationError{
+			Reason:  dbv1beta1.ReasonResourceOwnershipConflict,
+			Message: fmt.Sprintf("existing %T %s has no controller owner reference; refusing adoption", existing, key),
+			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+		}
 	}
 	// Fail if we can't determine that we own the resource
 	if actualOwner.APIVersion != expectedOwner.APIVersion ||
 		actualOwner.Kind != expectedOwner.Kind ||
 		actualOwner.Name != expectedOwner.Name ||
 		actualOwner.UID != expectedOwner.UID {
-		return fmt.Errorf("check ownership of %T %s: existing object is controlled by %s %q, expected %s %q", existing, key, actualOwner.Kind, actualOwner.Name, expectedOwner.Kind, expectedOwner.Name)
+		return &ReconciliationError{
+			Reason: dbv1beta1.ReasonResourceOwnershipConflict,
+			Message: fmt.Sprintf(
+				"existing %T %s is controlled by %s %q, expected %s %q; refusing to reconcile it",
+				existing, key, actualOwner.Kind, actualOwner.Name, expectedOwner.Kind, expectedOwner.Name,
+			),
+			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+		}
 	}
 
 	if err := reconcile(existing, desired); err != nil {
@@ -670,11 +693,12 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			// TODO: Define a safe keyfile rotation strategy before deleting a live member.
 			// See docs/adr/003-safe-keyfile-rotation.md for the open questions around
 			// primary protection, replication health, mixed-key operation, and replacement retries.
-			log.Info("Replacing replica Pod to update keyfile setup", "name", podName)
-			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("delete outdated replica pod: %w", err)
+			log.Info("Replica Pod replacement is blocked pending a safe keyfile rotation procedure", "name", podName)
+			return &ReconciliationError{
+				Reason:  dbv1beta1.ReasonKeyfileRotationBlocked,
+				Message: fmt.Sprintf("replica Pod %s needs replacement to update keyfile setup, but no safe replacement procedure is defined; resolve the keyfile setup manually", podName),
+				Affects: []string{dbv1beta1.ConditionProgressing},
 			}
-			return nil
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get replica pod: %w", err)
@@ -715,7 +739,11 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 	}
 	return ensureResource(ctx, r.Client, service, func(existing, desired *corev1.Service) error {
 		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
-			return fmt.Errorf("service %s/%s is not headless (clusterIP %q); refusing unsafe in-place conversion", existing.Namespace, existing.Name, existing.Spec.ClusterIP)
+			return &ReconciliationError{
+				Reason:  dbv1beta1.ReasonServiceNotHeadless,
+				Message: fmt.Sprintf("Service %s/%s has clusterIP %q; refusing unsafe in-place conversion to headless", existing.Namespace, existing.Name, existing.Spec.ClusterIP),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
 		}
 		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
 			return err
