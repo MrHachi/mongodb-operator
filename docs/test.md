@@ -45,6 +45,23 @@ _(Planned: Tests for scaling, member addition/removal, and configuration updates
 
 _(Planned: Tests for stable state maintenance and observation)_
 
-## Phase: Degraded
+## Degradation detection
 
-_(Planned: Tests for recovery from degraded states and error reporting)_
+Tests in this phase ensure that the operator correctly reacts to cluster health degradation reported by the instance managers.
+
+### 1. Health Reporting (Instance Manager)
+
+- **Scenario**: A cluster experiences a health issue (e.g., artificial replication lag introduced with `tc`).
+- **Expected Outcomes**:
+    - The elected instance-manager leader correctly detects the issue and updates the `Degraded` condition on the MongoDB CR.
+    - The operator's reconciliation loop detects the change and attempts to resolve the underlying issue (e.g., through resource recovery or scaling).
+
+### 2. Recovery from Degradation
+
+- **Scenario**: The underlying health issue is resolved (e.g., replication lag subsides).
+- **Expected Outcome**: The instance-manager leader revokes the `Degraded` condition, and the operator performs a no-op or a successful reconciliation to return to the `Ready` phase.
+
+### 3. Leadership Transitions
+
+- **Scenario**: A leadership transition occurs among the instance managers in event the leader fails to renew its Lease.
+- **Expected Outcome**: The new leader takes over reporting without causing conflicting or duplicate `Degraded` conditions.
