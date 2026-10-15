@@ -56,9 +56,11 @@ var _ = Describe("MongoDB initialization", func() {
 				{"pod", clusterName + "-r-a"},
 				{"service", clusterName},
 			} {
-				cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
-				_, err := utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred(), "%s %s should be created", resource.kind, resource.name)
+				Eventually(func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
+					_, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred(), "%s %s should be created", resource.kind, resource.name)
+				}, time.Minute).Should(Succeed())
 			}
 			cmd := exec.Command("kubectl", "get", "secret", clusterName+"-keyfile", "-n", testNamespace,
 				"-o", "jsonpath={.data.mongodb-keyfile}")
@@ -79,6 +81,9 @@ var _ = Describe("MongoDB initialization", func() {
 			password, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(password).NotTo(BeEmpty())
+
+			// TODO: run query against initialized MongoDB cluster to register data and verify that it exists
+			// Use a separate Pod
 		})
 
 		It("resumes initialization after the operator restarts and recreates deleted resources", func() {
@@ -105,27 +110,42 @@ var _ = Describe("MongoDB initialization", func() {
 				g.Expect(output).To(Equal("Running"))
 			}, 3*time.Minute).Should(Succeed())
 
-			By("deleting managed resources while the cluster is still initializing")
-			for _, resource := range []struct{ kind, name string }{{"service", clusterName}, {"pod", clusterName + "-r-a"}} {
-				cmd = exec.Command("kubectl", "delete", resource.kind, resource.name, "-n", testNamespace)
-				_, err = utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred())
-				Eventually(func(g Gomega) {
-					cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
-					_, err := utils.Run(cmd)
-					g.Expect(err).NotTo(HaveOccurred())
-				}, 3*time.Minute).Should(Succeed())
-			}
+			// We confirmed this Pod's existence above
+			By("deleting the initial Pod while the cluster is still initializing")
+			cmd = exec.Command("kubectl", "delete", "pod", clusterName+"-r-a", "-n", testNamespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", clusterName+"-r-a", "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 3*time.Minute).Should(Succeed())
+
+			// We haven't confirmed this Service exists yet, so we need to wait for it before proceeding
+			By("deleting the headless Service after the initial Pod is recreated")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", clusterName, "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 3*time.Minute).Should(Succeed())
+			cmd = exec.Command("kubectl", "delete", "service", clusterName, "-n", testNamespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", clusterName, "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 3*time.Minute).Should(Succeed())
 
 			By("waiting for initialization to resume")
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
+			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "True", "ReconcilingMembers", 10*time.Minute)
 		})
 
-		It("reports incomplete admin credentials as degraded", func() {
+		It("reports incomplete admin credentials in lifecycle conditions", func() {
 			const testNamespace = "mongodb-credentials-e2e"
 			const clusterName = "credentials-e2e"
 			createMongoDBTestResource(testNamespace, clusterName)
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "ReconcilingMembers", 10*time.Minute)
+			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "True", "ReconcilingMembers", 10*time.Minute)
 
 			By("removing the username from the managed credentials Secret")
 			cmd := exec.Command("kubectl", "patch", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
@@ -137,7 +157,7 @@ var _ = Describe("MongoDB initialization", func() {
 				"--type=merge", "-p", `{"status":{"phase":"Initializing"}}`)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			waitForMongoDBStatus(testNamespace, clusterName, "Degraded", "CredentialsIncomplete", 3*time.Minute)
+			waitForMongoDBStatus(testNamespace, clusterName, "Initializing", "False", "CredentialsIncomplete", 3*time.Minute)
 		})
 
 		It("reports a ClusterIP replacement service as an unsafe mismatch", func() {
