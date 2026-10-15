@@ -201,6 +201,10 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	return ctrl.Result{}, nil
 }
 
+// transitionInitializing records the current initialization operation in status.
+// It keeps the MongoDB phase at Initializing, sets Ready=False, and sets
+// Progressing=True with the message for reason. Call it whenever initialization
+// advances to another operation, including within a single reconciliation.
 func (r *MongoDBReconciler) transitionInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason dbv1beta1.ProgressReason) error {
 	message, ok := dbv1beta1.ProgressReasonMessage(reason)
 	if !ok {

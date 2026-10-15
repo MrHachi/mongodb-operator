@@ -28,8 +28,11 @@ import (
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 )
 
-// waitForReconciliation records a condition that may resolve on a later
-// observation, then requeues after the requested delay.
+// waitForReconciliation records a condition for a state that may resolve on a
+// later observation, then requeues after the requested delay. It leaves the
+// current phase unchanged, sets Ready=False and Progressing=True using the
+// supplied reason and message, and is used when reconciliation must wait for
+// an external resource or MongoDB state to become available.
 func (r *MongoDBReconciler) waitForReconciliation(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string, requeueAfter time.Duration) (ctrl.Result, error) {
 	if err := r.updateStatus(ctx, mongodb, mongodb.Status.Phase, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: reason, Message: message},
