@@ -76,16 +76,12 @@ func createMongoDBTestResource(testNamespace, clusterName string) {
 	createMongoDBResource(testNamespace, clusterName)
 }
 
-func waitForMongoDBStatus(testNamespace, clusterName, phase, reason string, timeout time.Duration) {
+func waitForMongoDBStatus(testNamespace, clusterName, phase, progressingStatus, progressingReason string, timeout time.Duration) {
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace,
-			"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}{\"/\"}{.status.conditions[?(@.type=='Degraded')].reason}")
+			"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].status}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}")
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
-		if phase == "Degraded" {
-			g.Expect(output).To(Equal(phase + "/NotProgressing/" + reason))
-		} else {
-			g.Expect(output).To(Equal(phase + "/" + reason + "/NoKnownIssues"))
-		}
+		g.Expect(output).To(Equal(phase + "/" + progressingStatus + "/" + progressingReason))
 	}, timeout).Should(Succeed())
 }
