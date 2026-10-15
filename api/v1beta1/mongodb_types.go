@@ -35,12 +35,13 @@ const (
 	ConditionProgressing = "Progressing"
 	ConditionDegraded    = "Degraded"
 
-	ReasonInitializing   = "Initializing"
-	ReasonProgressing    = "Progressing"
-	ReasonDegraded       = "Degraded"
-	ReasonReady          = "Ready"
-	ReasonNotProgressing = "NotProgressing"
-	ReasonNoKnownIssues  = "NoKnownIssues"
+	ReasonInitializing         = "Initializing"
+	ReasonProgressing          = "Progressing"
+	ReasonDegraded             = "Degraded"
+	ReasonServiceIssuesPresent = "ServiceIssuesPresent"
+	ReasonReady                = "Ready"
+	ReasonNotProgressing       = "NotProgressing"
+	ReasonNoKnownIssues        = "NoKnownIssues"
 
 	ReasonInstanceManagerUnavailable = "InstanceManagerUnavailable"
 	ReasonPrimaryUnavailable         = "PrimaryUnavailable"
@@ -101,10 +102,12 @@ type MongoDBStatus struct {
 	Phase MongoDBPhase `json:"phase,omitempty"`
 
 	// Conditions represent the observed state of the MongoDB resource. The operator
-	// maintains Ready, Progressing, and Degraded conditions. Progressing is True
-	// while reconciliation is working toward the desired state, including recovery
-	// from a problem, and its Reason identifies the current operation or problem.
-	// Degraded is reserved for observed cluster problems that block the desired state.
+	// maintains Ready and Progressing conditions. The leader instance-manager maintains
+	// Degraded. Progressing is True while reconciliation is working toward the desired
+	// state, including recovery from a problem, and its Reason identifies the current
+	// operation or problem.
+	// Degraded=True with reason ServiceIssuesPresent means one or more degradation
+	// conditions are set on the cluster.
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
 	// +listMapKey=type
