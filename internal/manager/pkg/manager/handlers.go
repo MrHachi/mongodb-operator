@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -68,11 +69,13 @@ func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request)
 }
 
 func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
-	// TODO: extract to request body
-	username := "admin"
-	password := "adminpassword" // Should be securely managed
+	var req AdminRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
-	err := m.client.CreateAdminUser(r.Context(), username, password)
+	err := m.client.CreateAdminUser(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			w.WriteHeader(http.StatusConflict)
@@ -83,4 +86,9 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+type AdminRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }

@@ -35,6 +35,13 @@ Creates the administrative user for the MongoDB instance.
 - **Endpoint**: `POST /v1/admin`
 - **Description**: Creates a dedicated administrative user with required privileges for cluster management.
 - **Idempotency**: This endpoint must be idempotent. If the admin user already exists, it should return a `409` response.
+- **Request Body**:
+    ```json
+    {
+      "username": "string",
+      "password": "string"
+    }
+    ```
 - **Implementation Detail**: The sidecar should use the MongoDB Go driver to execute the command.
 
 ## Configuration
