@@ -37,6 +37,9 @@ import (
 func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling initialization phase", "name", mongodb.Name)
+	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
+	}
 	if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -78,6 +81,9 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		// Given that the cluster is running in RS mode and we have a primary, we assume this cluster is already Initialized
 		// and move on to reconciling the discovered primary node
 		pod = discovery.Primary
+	case discoveryPodsNotReady:
+		log.Info("Waiting for managed Pods to become ready", "name", mongodb.Name)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	case discoveryPodsUnreachable:
 		// If we have unreachable nodes, this constitutes an error mode and we transition to Degraded state after ensuring
 		// the headless service is properly set up
