@@ -37,6 +37,7 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	"github.com/MrHachi/mongodb-operator/internal/controller"
+	controllerconfig "github.com/MrHachi/mongodb-operator/internal/controller/config"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -184,6 +185,7 @@ func main() {
 	if err := (&controller.MongoDBReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Config: controllerconfig.LoadConfig(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "mongodb")
 		os.Exit(1)
