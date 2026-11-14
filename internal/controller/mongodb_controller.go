@@ -425,7 +425,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			Hostname:      podName,
 			Subdomain:     mongodb.Name,
 			RestartPolicy: corev1.RestartPolicyAlways,
-			Containers: []corev1.Container{
+			InitContainers: []corev1.Container{
 				{
 					Name:    "setup-keyfile",
 					Image:   "mongo:latest",
@@ -437,6 +437,8 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 						},
 					},
 				},
+			},
+			Containers: []corev1.Container{
 				{
 					Name:  "instance-manager",
 					Image: "ghcr.io/mrhachi/mongodb-instance-manager:v0.1",
@@ -452,11 +454,35 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 							ContainerPort: 8080,
 						},
 					},
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/livez", Port: intstr.FromString("http"), Scheme: corev1.URISchemeHTTP}},
+						PeriodSeconds: 10, TimeoutSeconds: 2,
+						FailureThreshold: 3, SuccessThreshold: 1,
+					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/readyz", Port: intstr.FromString("http"), Scheme: corev1.URISchemeHTTP}},
+						PeriodSeconds: 5, TimeoutSeconds: 2,
+						FailureThreshold: 3, SuccessThreshold: 1,
+					},
 				},
 				{
-					Name:    "mongodb",
-					Image:   "mongo:latest",
-					Command: []string{"mongod", "--keyFile", "/data/configdb/mongodb.key", "--replSet", mongodb.Name},
+					Name:  "mongodb",
+					Image: "mongo:latest",
+					Args: []string{
+						"--replSet", mongodb.Name,
+						"--clusterAuthMode", "keyFile", "--keyFile", "/data/configdb/mongodb.key",
+						"--bind_ip_all",
+					},
+					StartupProbe: &corev1.Probe{
+						ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(27017)}},
+						PeriodSeconds: 10, TimeoutSeconds: 2,
+						FailureThreshold: 30,
+					},
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(27017)}},
+						PeriodSeconds: 10, TimeoutSeconds: 2,
+						FailureThreshold: 3,
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",

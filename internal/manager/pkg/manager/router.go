@@ -6,6 +6,8 @@ import (
 
 func (h *InstanceManager) Serve() *chi.Mux {
 	r := chi.NewRouter()
+	r.Get("/livez", h.HandleLivez)
+	r.Get("/readyz", h.HandleReadyz)
 
 	r.Route("/v1", func(r chi.Router) {
 		// Routes that require 'get' permission on MongoDB resources.

@@ -38,6 +38,13 @@ func (c *Client) Close(ctx context.Context) error {
 	return c.client.Disconnect(ctx)
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	if err := c.client.Ping(ctx, nil); err != nil {
+		return fmt.Errorf("ping mongodb: %w", err)
+	}
+	return nil
+}
+
 // Authenticate verifies the provided credentials and returns a new connection URI.
 func (c *Client) Authenticate(ctx context.Context, username, password, authSource string) (string, error) {
 	u, err := url.Parse(c.uri)
