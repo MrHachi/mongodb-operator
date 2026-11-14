@@ -35,7 +35,7 @@ MongoDB Pods currently use the namespace's `default` ServiceAccount. During init
 
 Initiates the MongoDB Replica Set for the cluster.
 
-- **Endpoint**: `POST /v1/initiate`
+- **Endpoint**: `POST /v1/mongo/initiate`
 - **Description**: Triggers the MongoDB `rs.initiate()` command.
 - **Idempotency**: This endpoint must be idempotent. If the Replica Set is already initialized, it should return a `409` response.
 - **Implementation Detail**: The sidecar should use the MongoDB Go driver to execute the command.
@@ -44,7 +44,7 @@ Initiates the MongoDB Replica Set for the cluster.
 
 Creates the administrative user for the MongoDB instance.
 
-- **Endpoint**: `POST /v1/admin`
+- **Endpoint**: `POST /v1/mongo/admin`
 - **Description**: Creates a dedicated administrative user with required privileges for cluster management.
 - **Idempotency**: This endpoint must be idempotent. If the admin user already exists, it should return a `409` response.
 - **Request Body**:
@@ -60,8 +60,8 @@ Creates the administrative user for the MongoDB instance.
 
 Retrieves the current MongoDB replica set status, including member states, applied and durable optimes, and replication lag derived from the primary's applied optime.
 
-- **Endpoint**: `GET /v1/topology`
-- **Description**: Returns the `replSetGetStatus` view. Configuration is returned separately by `GET /v1/config`.
+- **Endpoint**: `GET /v1/mongo/topology`
+- **Description**: Returns the `replSetGetStatus` view. Configuration is returned separately by `GET /v1/mongo/config`.
 - **Response Body**:
     ```json
     {
@@ -93,7 +93,7 @@ Retrieves the current MongoDB replica set status, including member states, appli
 
 Retrieves the current replica set voting and election configuration.
 
-- **Endpoint**: `GET /v1/config`
+- **Endpoint**: `GET /v1/mongo/config`
 - **Description**: Returns the `replSetGetConfig` settings, including each member's voting eligibility, votes, priority, and arbiter/hidden flags. `replication_lag` in the topology response is an integer number of nanoseconds because it is serialized from Go's `time.Duration`.
 - **Response Body**:
     ```json
@@ -120,7 +120,7 @@ Retrieves the current replica set voting and election configuration.
 
 Authenticates with the MongoDB instance and updates the connection credentials for subsequent requests.
 
-- **Endpoint**: `POST /v1/authenticate`
+- **Endpoint**: `POST /v1/mongo/authenticate`
 - **Description**: Verifies the provided credentials and replaces the current MongoDB client with a new one using the given authentication information.
 - **Request Body**:
     ```json

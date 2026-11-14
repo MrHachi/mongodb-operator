@@ -48,11 +48,11 @@ This phase focuses on setting up the first primary node and the foundational clu
 - **Cluster Bootstrapping**:
     - The operator waits for the Primary Pod to reach the `Ready` state (requeuing the reconciliation every 15 seconds if not ready).
     - **RS Initiation**: once the Pod becomes ready, the operator does the following:
-        - **RS Status Check**: the operator calls `GET /v1/topology` on the instance manager to check RS initiation status.
-        - **Execute RS Initiation**: if `GET /v1/topology` returns a `412 not initialized` status, the operator calls `POST /v1/initiate`.
+        - **RS Status Check**: the operator calls `GET /v1/mongo/topology` on the instance manager to check RS initiation status.
+        - **Execute RS Initiation**: if `GET /v1/mongo/topology` returns a `412 not initialized` status, the operator calls `POST /v1/mongo/initiate`.
     - **Admin User Creation**: once the MongoDB primary is confirmed to be running in RS mode, the operator creates the admin user.
-        - **Admin User Auth Attempt**: the operator attempts to authenticate by calling `POST /v1/authenticate` with the admin user's credentials on the instance manager.
-        - **Execute Admin User Creation**: if `POST /v1/authenticate` returns a `401 unauthenticated` status, the operator calls `POST /v1/admin` on the instance manager with the admin user's credentials.
+        - **Admin User Auth Attempt**: the operator attempts to authenticate by calling `POST /v1/mongo/authenticate` with the admin user's credentials on the instance manager.
+        - **Execute Admin User Creation**: if `POST /v1/mongo/authenticate` returns a `401 unauthenticated` status, the operator calls `POST /v1/mongo/admin` on the instance manager with the admin user's credentials.
 - **Transition**: After cluster bootstrap, the CR `status.phase` is updated to `Progressing`. Its `Progressing` condition uses the `ReconcilingMembers` reason while replica set members are reconciled.
 
 ### 2. Progressing Phase (`status.phase = Progressing`)
@@ -71,7 +71,7 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
     - Each reconciliation performs at most one member scale operation, then requeues and observes the cluster again before taking another action. This limits quorum risk and avoids making several decisions from stale observations.
     - **Scale-In (Draining)**:
         1.  Select the healthy `SECONDARY` with the least recently applied optime, among members whose replication lag is within the configured `drainThreshold`. This preserves the most synchronized members as failover candidates.
-        2.  Read replica-set status from `GET /v1/topology` and voting/election settings from `GET /v1/config`. Defer if the reported topology and configuration versions differ.
+        2.  Read replica-set status from `GET /v1/mongo/topology` and voting/election settings from `GET /v1/mongo/config`. Defer if the reported topology and configuration versions differ.
 
         3.  Mark the selected member as draining and ensure instance-manager leadership is not on that member.
         4.  Capture a fixed majority-commit checkpoint from the current primary and wait for the selected member's durable optime to reach it.

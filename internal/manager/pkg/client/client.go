@@ -75,7 +75,7 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 
 // GetTopology retrieves the replica set topology and member states.
 func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
-	status, body, err := c.request(ctx, http.MethodGet, "/v1/topology", nil)
+	status, body, err := c.request(ctx, http.MethodGet, "/v1/mongo/topology", nil)
 	if err != nil {
 		return nil, fmt.Errorf("get topology: %w", err)
 	}
@@ -96,7 +96,7 @@ func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 
 // GetConfig retrieves the replica set voting and election configuration.
 func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
-	status, body, err := c.request(ctx, http.MethodGet, "/v1/config", nil)
+	status, body, err := c.request(ctx, http.MethodGet, "/v1/mongo/config", nil)
 	if err != nil {
 		return nil, fmt.Errorf("get replica set configuration: %w", err)
 	}
@@ -116,7 +116,7 @@ func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
 
 // Initiate starts the replica set. A conflict means it was already initiated.
 func (c *Client) Initiate(ctx context.Context) error {
-	status, body, err := c.request(ctx, http.MethodPost, "/v1/initiate", nil)
+	status, body, err := c.request(ctx, http.MethodPost, "/v1/mongo/initiate", nil)
 	if err != nil {
 		return fmt.Errorf("initiate replica set: %w", err)
 	}
@@ -133,7 +133,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) er
 		Password   string `json:"password"`
 		AuthSource string `json:"auth_source"`
 	}{Username: username, Password: password, AuthSource: "admin"}
-	status, body, err := c.request(ctx, http.MethodPost, "/v1/authenticate", request)
+	status, body, err := c.request(ctx, http.MethodPost, "/v1/mongo/authenticate", request)
 	if err != nil {
 		return fmt.Errorf("authenticate admin user: %w", err)
 	}
@@ -153,7 +153,7 @@ func (c *Client) CreateAdmin(ctx context.Context, username, password string) err
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}{Username: username, Password: password}
-	status, body, err := c.request(ctx, http.MethodPost, "/v1/admin", request)
+	status, body, err := c.request(ctx, http.MethodPost, "/v1/mongo/admin", request)
 	if err != nil {
 		return fmt.Errorf("create admin user: %w", err)
 	}
