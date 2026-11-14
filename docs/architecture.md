@@ -71,11 +71,15 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
     - Each reconciliation performs at most one member scale operation, then requeues and observes the cluster again before taking another action. This limits quorum risk and avoids making several decisions from stale observations.
     - **Scale-In (Draining)**:
         1.  Select the healthy `SECONDARY` with the least recently applied optime, among members whose replication lag is within the configured `drainThreshold`. This preserves the most synchronized members as failover candidates.
-        2.  Defer scale-in if removing the candidate would violate voting quorum, survivor replication health, or replica-set configuration stability. The operator does not force reconfiguration or manage oplog rollbacks.
+        2.  Read replica-set status from `GET /v1/topology` and voting/election settings from `GET /v1/config`. Defer if the reported topology and configuration versions differ.
+
         3.  Mark the selected member as draining and ensure instance-manager leadership is not on that member.
         4.  Capture a fixed majority-commit checkpoint from the current primary and wait for the selected member's durable optime to reach it.
         5.  Remove the member from the MongoDB Replica Set configuration and wait for the configuration change to be recognized.
         6.  Shut down the drained member while retaining its PVC. Set the PVC label `db.mrhachi.dev/status=jettisoned`, annotation `db.mrhachi.dev/jettisoned-at` (UTC timestamp), and annotation `db.mrhachi.dev/data-time` to the captured majority-commit checkpoint time. Timestamps use UTC RFC3339 format.
+
+        Defer scale-in if removing the candidate would violate voting quorum, survivor replication health, or replica-set configuration stability. The operator does not force reconfiguration or manage oplog rollbacks.
+
     - **Scale-Out (Expansion)**:
         1.  **Discover a PVC to reclaim**: Search managed PVCs marked `jettisoned`. When reclaiming PVCs, the PVC with the latest valid `db.mrhachi.dev/data-time` is always prioritized because it contains the most recent majority-committed checkpoint. Tie-breaking is done by choosing the lowest member ordinal in alphabetical order. PVCs with missing or invalid data-time annotations rank behind PVCs with valid timestamps.
         2.  **Provision**: If a PVC was selected, create a Pod using its member suffix and return the PVC to `in-use`. Otherwise, create a PVC and Pod using the lowest available member suffix, filling gaps in the sequence. Suffixes use bijective base 26: `a` through `z`, then `aa` through `az`, `ba`, and so on.
