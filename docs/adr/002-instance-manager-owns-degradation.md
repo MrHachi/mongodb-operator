@@ -22,9 +22,9 @@ We want to maintain a clear separation between observing cluster health and reco
 
 We will delegate MongoDB cluster health evaluation and reporting to the instance managers. Resource reconciliation and recovery remain responsibilities of the operator.
 
-The instance manager will monitor MongoDB cluster health and publish findings to the status subresource of the MongoDB CR. In turn, status condition reports by the instance manager will trigger the reconciliation by the operator, which will attempt to resolve them.
+The instance manager will monitor MongoDB cluster health and publish findings to the status subresource of the MongoDB CR. The elected leader instance-manager will maintain `Degraded` as an aggregate: `True` with reason `ServiceIssuesPresent` means one or more degradation conditions are set on the cluster. The detailed condition types are deferred for a separate design discussion. In turn, status condition reports by the instance manager will trigger reconciliation by the operator, which will attempt to resolve the underlying issues.
 
-Once the instance manager observes that the degradation condition afflicting the cluster no longer holds, it will revoke the status condition. This should not trigger reconciliation, or it should trigger a no-op reconciliation.
+Once the instance manager observes that no degradation conditions remain set on the cluster, it will set `Degraded=False` with reason `NoKnownIssues`. This should not trigger reconciliation, or it should trigger a no-op reconciliation.
 
 Only the elected reporting manager will publish cluster-level health conditions.
 
@@ -38,7 +38,7 @@ We accept this limitation because health reports are observational and idempoten
 
 ### Status ownership
 
-The instance manager will own the `Degraded` condition. The operator will retain ownership of lifecycle-related status phase and conditions.
+The instance manager will own the `Degraded` condition. The operator will retain ownership of lifecycle-related status phase and conditions. The aggregate condition will use reason `ServiceIssuesPresent` when true and `NoKnownIssues` when false; its message will summarize the aggregate rather than enumerate individual condition types.
 
 Status updates will use the CR's /status subresource, with field ownership configured to prevent unrelated status fields from being overwritten.
 

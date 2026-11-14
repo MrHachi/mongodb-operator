@@ -37,16 +37,17 @@ The MongoDB container has a TCP startup probe on port `27017` with a five-minute
 
 ## Status (`status`)
 
-| Field        | Type     | Description                                                                      |
-| :----------- | :------- | :------------------------------------------------------------------------------- |
-| `phase`      | `string` | Current lifecycle phase: `Initializing`, `Progressing`, or `Ready`.              |
-| `conditions` | `list`   | Standard `metav1.Condition` list reporting state (e.g., `Progressing`, `Ready`). |
+| Field        | Type     | Description                                                              |
+| :----------- | :------- | :----------------------------------------------------------------------- |
+| `phase`      | `string` | Current lifecycle phase: `Initializing`, `Progressing`, or `Ready`.      |
+| `conditions` | `list`   | Standard `metav1.Condition` list reporting lifecycle and service health. |
 
 ### Status conditions (`status.conditions`)
 
-| Condition           | Type   | Description                                                                                                                                                                                                                    |
-| :------------------ | :----- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Ready`             | `bool` | Flag indicating whether the MongoDB cluster is eligible to serve applications.                                                                                                                                                 |
-| `Progressing`       | `bool` | Flag indicating whether reconciliation is currently proceeding.                                                                                                                                                                |
-| `NeedsIntervention` | `bool` | Flag indicating that manual administrator intervention is required to alleviate service degradation.                                                                                                                           |
-| `Degraded`          | `bool` | Flag indicating that the cluster is experiencing health degradation (e.g., replication lag, primary unavailability), as observed and reported by the instance manager. Note that a cluster can be both `Degraded` and `Ready`. |
+| Condition     | Type   | Description                                                                                                                                                                                                                               |
+| :------------ | :----- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Ready`       | `bool` | Whether the MongoDB cluster is eligible to serve applications.                                                                                                                                                                            |
+| `Progressing` | `bool` | Whether reconciliation is currently proceeding.                                                                                                                                                                                           |
+| `Degraded`    | `bool` | Aggregate service-health signal reported by the elected leader instance-manager. `True` with reason `ServiceIssuesPresent` means one or more degradation conditions are set on the cluster. A cluster can be both `Degraded` and `Ready`. |
+
+The leader instance-manager owns the `Degraded` condition. When no degradation conditions are set, it clears `Degraded` to `False` with reason `NoKnownIssues`. The detailed condition types that contribute to this aggregate have not yet been defined.

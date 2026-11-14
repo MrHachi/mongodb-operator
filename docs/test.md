@@ -28,7 +28,7 @@ The `Initializing` phase is the most critical for cluster bootstrapping. Tests i
 ### 4. Error Handling & Status Conditions
 
 - **Scenario**: A required resource is present but invalid (e.g., the Keyfile Secret exists but contains no data).
-- **Expected Outcome**: The operator sets the `Degraded` status condition to `True` with a specific, actionable `Reason` and `Message` (e.g., `ReasonCredentialsIncomplete`).
+- **Expected Outcome**: The operator reports the applicable lifecycle condition with a specific, actionable `Reason` and `Message` (e.g., `CredentialsIncomplete`). Service-health degradation is reported separately by the leader instance-manager.
 
 #### 5. Service Type Mismatch (Drift)
 
@@ -53,15 +53,15 @@ Tests in this phase ensure that the operator correctly reacts to cluster health 
 
 - **Scenario**: A cluster experiences a health issue (e.g., artificial replication lag introduced with `tc`).
 - **Expected Outcomes**:
-    - The elected instance-manager leader correctly detects the issue and updates the `Degraded` condition on the MongoDB CR.
+    - The elected instance-manager leader correctly detects the issue and sets `Degraded=True` with reason `ServiceIssuesPresent`. This means one or more degradation conditions are set on the cluster; the individual condition types remain to be designed.
     - The operator's reconciliation loop detects the change and attempts to resolve the underlying issue (e.g., through resource recovery or scaling).
 
 ### 2. Recovery from Degradation
 
 - **Scenario**: The underlying health issue is resolved (e.g., replication lag subsides).
-- **Expected Outcome**: The instance-manager leader revokes the `Degraded` condition, and the operator performs a no-op or a successful reconciliation to return to the `Ready` phase.
+- **Expected Outcome**: Once no degradation conditions remain set, the instance-manager leader sets `Degraded=False` with reason `NoKnownIssues`. The operator performs a no-op or successful reconciliation, and the cluster remains or returns to the `Ready` phase.
 
 ### 3. Leadership Transitions
 
 - **Scenario**: A leadership transition occurs among the instance managers in event the leader fails to renew its Lease.
-- **Expected Outcome**: The new leader takes over reporting without causing conflicting or duplicate `Degraded` conditions.
+- **Expected Outcome**: The new leader takes over reporting without conflicting `Degraded` updates and continues to report the aggregate condition consistently.

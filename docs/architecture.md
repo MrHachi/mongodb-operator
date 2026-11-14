@@ -84,7 +84,7 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
     - The cluster is considered "Stable" when at least $n/2+1$ members are in a voting state (`PRIMARY` or `SECONDARY`).
     - The operator waits for this quorum to persist for a configured number of consecutive minutes.
 
-**Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. Any failure to reach quorum or unexpected member crashes will set the `Degraded` status condition to `True`.
+**Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. The elected leader instance-manager reports `Degraded=True` with reason `ServiceIssuesPresent` when one or more cluster degradation conditions are set. A cluster may remain `Ready` while degraded.
 
 **Note**: Container image version updates and scale-to-zero remain open problems for future development.
 
