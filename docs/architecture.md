@@ -76,6 +76,8 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
 
 **Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. Any failure to reach quorum or unexpected member crashes will transition the cluster to `Degraded`.
 
+**Note**: Container image version updates and scale-to-zero remain open problems for future development.
+
 ## Security & RBAC
 
 Security is implemented via Kubernetes RBAC and sidecar-based authentication.
