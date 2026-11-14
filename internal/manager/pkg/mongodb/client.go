@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -19,6 +21,18 @@ type Member struct {
 	Host      string `bson:"name" json:"host"`
 	State     string `bson:"stateStr" json:"state"`
 	StateCode int    `bson:"state" json:"state_code"`
+
+	AppliedOptime         Optime        `bson:"optime" json:"applied_optime"`
+	DurableOptime         Optime        `bson:"optimeDurable" json:"durable_optime"`
+	AppliedAt             time.Time     `bson:"optimeDate" json:"applied_at"`
+	DurableAt             time.Time     `bson:"optimeDurableDate" json:"durable_at"`
+	ReplicationLagSeconds time.Duration `bson:"-" json:"replication_lag_seconds,omitempty"`
+}
+
+// Optime identifies an operation in the replica set oplog.
+type Optime struct {
+	Timestamp primitive.Timestamp `bson:"ts" json:"timestamp"`
+	Term      int64               `bson:"t" json:"term"`
 }
 
 type Client struct {
@@ -135,6 +149,29 @@ func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
 	var topology Topology
 	if err := db.RunCommand(ctx, command).Decode(&topology); err != nil {
 		return nil, fmt.Errorf("cluster not initialized: %w", err)
+	}
+
+	var primaryAppliedAt time.Time
+	for _, member := range topology.Members {
+		if member.State == "PRIMARY" {
+			primaryAppliedAt = member.AppliedAt
+			break
+		}
+	}
+
+	if !primaryAppliedAt.IsZero() {
+		for i := range topology.Members {
+			member := &topology.Members[i]
+			if member.State != "SECONDARY" || member.AppliedAt.IsZero() {
+				continue
+			}
+
+			lag := primaryAppliedAt.Sub(member.AppliedAt)
+			if lag < 0 {
+				lag = 0
+			}
+			member.ReplicationLagSeconds = lag
+		}
 	}
 
 	return &topology, nil
