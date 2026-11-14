@@ -667,6 +667,9 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			}
 		}
 		if needsReplacement {
+			// TODO: Define a safe keyfile rotation strategy before deleting a live member.
+			// See docs/adr/003-safe-keyfile-rotation.md for the open questions around
+			// primary protection, replication health, mixed-key operation, and replacement retries.
 			log.Info("Replacing replica Pod to update keyfile setup", "name", podName)
 			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete outdated replica pod: %w", err)
