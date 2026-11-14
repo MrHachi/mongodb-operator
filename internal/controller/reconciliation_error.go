@@ -26,10 +26,11 @@ import (
 )
 
 // ReconciliationError reports a persistent condition that prevents safe
-// reconciliation. Affects lists operator-owned conditions to set to False.
+// reconciliation.
 type ReconciliationError struct {
 	Message string
 	Reason  string
+	// Affects lists operator-owned conditions to set to False.
 	Affects []string
 }
 
