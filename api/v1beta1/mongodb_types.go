@@ -38,11 +38,9 @@ type MongoDBSpec struct {
 
 // MongoDBStatus defines the observed state of MongoDB.
 type MongoDBStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// Phase represents the current phase of the MongoDB cluster lifecycle
+	// Valid values are: Initializing, Scaling, Ready, Degraded
+	Phase string `json:"phase,omitempty"`
 
 	// conditions represent the current state of the MongoDB resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
