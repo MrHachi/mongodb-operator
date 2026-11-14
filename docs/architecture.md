@@ -15,6 +15,7 @@ The central controller that manages the lifecycle of MongoDB clusters through a 
 A Go-based service (using the Chi router) deployed as a sidecar container within each MongoDB Pod.
 
 - **Responsibility**: Performs sensitive operations that require interaction with the database itself, such as initiating the Replica Set (RS) and creating administrative users.
+- **Health Monitoring**: Monitors MongoDB cluster health and reports findings to the MongoDB CR status subresource. To avoid competing writers, instance managers use Kubernetes Leases to elect a single reporting leader.
 - **Communication**: The operator communicates with the sidecar via the Pod's raw IP address on port `8080`.
 - **Authentication**: The sidecar validates the operator's identity by performing `TokenReview` and `SubjectAccessReview` against the Kubernetes API.
 
@@ -29,7 +30,7 @@ The MongoDB watch enqueues reconciliation for resource creation and deletion, sp
 This phase focuses on setting up the first primary node and the foundational cluster infrastructure.
 
 - Before contacting any instance-manager, the operator creates a ClusterRoleBinding granting the namespace's `default` ServiceAccount permission to create TokenReviews and SubjectAccessReviews. A finalizer removes this cluster-scoped binding when the MongoDB resource is deleted.
-- Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. If managed Pods exist but no primary is reported, the cluster moves to a `Degraded` status condition and recovery reconciliation retries discovery. A fresh `-r-a` member is created only when no managed Pods are found.
+- Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. A fresh `-r-a` member is created only when no managed Pods are found.
 
 - **Resource Provisioning**:
     - **Keyfile**: Generates a secure keyfile and stores it in a Kubernetes `Secret`.
