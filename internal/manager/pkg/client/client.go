@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	managerconfig "github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
 	managerdb "github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
 	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,13 +36,13 @@ type Client struct {
 }
 
 // New creates a client for one instance-manager pod and the operator ServiceAccount used to call it.
-func New(baseURL string, kube kubernetes.Interface, namespace, saName, audience string) *Client {
+func New(baseURL string, kube kubernetes.Interface, namespace, saName string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		kube:       kube,
 		namespace:  namespace,
 		saName:     saName,
-		audience:   audience,
+		audience:   managerconfig.InstanceManagerAudience,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
