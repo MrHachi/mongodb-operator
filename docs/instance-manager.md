@@ -45,27 +45,46 @@ Creates the administrative user for the MongoDB instance.
     ```
 - **Implementation Detail**: The sidecar should use the MongoDB Go driver to execute the command.
 
-    ### 3. Get Cluster Topology
+### 3. Get Cluster Topology
 
-    Retrieves the current MongoDB replica set topology.
+Retrieves the current MongoDB replica set topology.
 
-    - **Endpoint**: `GET /v1/topology`
-    - **Description**: Returns a JSON list of all members in the replica set.
-    - **Response Body**:
-        ```json
+- **Endpoint**: `GET /v1/topology`
+- **Description**: Returns a JSON list of all members in the replica set.
+- **Response Body**:
+    ```json
+    {
+        "members": [
         {
-          "members": [
-            {
-              "id": 0,
-              "host": "mongodb-0.example.com:27017"
-            },
-            ...
-          ]
-        }
-        ```
-    - **Errors**:
-        - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
-        - `500 Internal Server Error`: For other server-side errors.
+            "id": 0,
+            "host": "mongodb-0.example.com:27017"
+        },
+        ...
+        ]
+    }
+    ```
+- **Errors**:
+    - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
+    - `500 Internal Server Error`: For other server-side errors.
+
+### 4. Authenticate
+
+Authenticates with the MongoDB instance and updates the connection credentials for subsequent requests.
+
+- **Endpoint**: `POST /v1/authenticate`
+- **Description**: Verifies the provided credentials and replaces the current MongoDB client with a new one using the given authentication information.
+- **Request Body**:
+    ```json
+    {
+        "username": "string",
+        "password": "string",
+        "auth_source": "string"
+    }
+    ```
+- **Errors**:
+    - `401 Unauthorized`: If authentication fails or credentials are incorrect.
+    - `400 Bad Request`: If the request body is invalid.
+    - `500 Internal Server Error`: For other server-side errors.
 
 ## Configuration
 

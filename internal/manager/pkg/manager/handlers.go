@@ -1,16 +1,19 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/auth"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
 )
 
 type InstanceManager struct {
+	mu               sync.Mutex
 	client           *mongodb.Client
 	authenticator    *auth.Authenticator
 	rsName, hostname string
@@ -56,8 +59,47 @@ func (m *InstanceManager) RequirePermission(verb, group, resource string) func(h
 	}
 }
 
+func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Request) {
+	var req AuthenticationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	m.mu.Lock()
+	currentClient := m.client
+	m.mu.Unlock()
+
+	newURI, err := currentClient.Authenticate(r.Context(), req.Username, req.Password, req.AuthSource)
+	if err != nil {
+		http.Error(w, "Authentication failed", http.StatusUnauthorized)
+		return
+	}
+
+	newClient, err := mongodb.NewClient(r.Context(), newURI)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	m.mu.Lock()
+	oldClient := m.client
+	m.client = newClient
+	m.mu.Unlock()
+
+	if oldClient != nil {
+		go oldClient.Close(context.Background())
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request) {
-	err := m.client.InitiateReplicaSet(r.Context(), m.rsName, m.hostname)
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	err := client.InitiateReplicaSet(r.Context(), m.rsName, m.hostname)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already initialized") {
 			w.WriteHeader(http.StatusConflict)
@@ -77,7 +119,11 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := m.client.CreateAdminUser(r.Context(), req.Username, req.Password)
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	err := client.CreateAdminUser(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			w.WriteHeader(http.StatusConflict)
@@ -91,7 +137,11 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Request) {
-	topology, err := m.client.GetTopology(r.Context())
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	topology, err := client.GetTopology(r.Context())
 	if err != nil {
 		if strings.Contains(err.Error(), "cluster not initialized") {
 			w.WriteHeader(http.StatusPreconditionFailed)
@@ -106,6 +156,12 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+type AuthenticationRequest struct {
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	AuthSource string `json:"auth_source"`
 }
 
 type AdminRequest struct {
