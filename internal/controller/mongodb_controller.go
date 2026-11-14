@@ -140,6 +140,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
+
 	recoveryStatus, err := r.reconcileDegradation(ctx, mongodb)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconcile degradation: %w", err)
@@ -161,22 +162,15 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	case dbv1beta1.PhaseProgressing:
 		log.Info("Reconciling MongoDB cluster", "name", mongodb.Name)
-		// To be implemented
-		if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
-			reconcileErr = err
-		}
+		result, reconcileErr = r.reconcileProgressing(ctx, mongodb)
 
 	case dbv1beta1.PhaseReady:
 		log.Info("Configuring ready MongoDB cluster", "name", mongodb.Name)
-		if err := r.transitionReady(ctx, mongodb); err != nil {
-			reconcileErr = err
-		}
+		result, reconcileErr = r.reconcileReady(ctx, mongodb)
 
 	default:
 		log.Info("Migrating unknown phase to Progressing", "phase", mongodb.Status.Phase)
-		if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
-			reconcileErr = err
-		}
+		result, reconcileErr = r.reconcileProgressing(ctx, mongodb)
 	}
 	if reconcileErr != nil {
 		// return the result as-is if a reconciliation error occurred: this supercedes the degradation recovery requeue decision
