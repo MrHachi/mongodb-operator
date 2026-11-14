@@ -204,6 +204,5 @@ func (r *MongoDBReconciler) transitionInitializing(ctx context.Context, mongodb 
 	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseInitializing, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonInitializing, Message: "MongoDB cluster is not ready"},
 		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: string(reason), Message: message},
-		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
 	})
 }
