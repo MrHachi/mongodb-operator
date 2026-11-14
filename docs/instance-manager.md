@@ -8,18 +8,20 @@ GHCR repository tag: `ghcr.io/mrhachi/mongodb-instance-manager`
 
 - **Port**: `8080`
 - **Protocol**: `HTTP/1.1`
-- **Authentication**: All requests must include a Kubernetes ServiceAccount token in the header:
-  `Authorization: Bearer <token>`
+- **Authentication**: All requests must include a short-lived Kubernetes ServiceAccount token in the header:
+  `Authorization: Bearer <token>`. The operator requests this token for the `db.mrhachi.dev/mongodb/instance-manager` audience.
 - **Authorization scope**: The sidecar checks permissions in the MongoDB namespace configured through `MONGODB_NAMESPACE`; callers do not provide a namespace header.
 
 ### Security Enforcement
 
 The sidecar verifies the operator's identity using the Kubernetes API. It performs a `TokenReview` and `SubjectAccessReview` against the Kubernetes API.
 
-Specifically, the operator's ServiceAccount must have:
+The operator's ServiceAccount must have:
 
-- `create` permission for the `mongodbs` resource in the `db.mrhachi.dev` API group.
-- `get` permission for the `mongodbs` resource in the `db.mongodb.dev` API group.
+- `create` permission on `serviceaccounts/token` for its own ServiceAccount.
+- `create` and `get` permissions for `mongodbs` in the `db.mrhachi.dev` API group.
+
+The MongoDB pod's ServiceAccount must be able to create `tokenreviews` and `subjectaccessreviews` so the sidecar can validate the token and authorize the request.
 
 ## API Endpoints
 

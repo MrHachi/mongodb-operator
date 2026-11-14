@@ -11,6 +11,14 @@ metadata:
   name: {{ include "mongodb-operator-2.resourceName" (dict "suffix" "manager-role" "context" $) }}
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  resourceNames:
+  - {{ include "mongodb-operator-2.serviceAccountName" . }}
+  verbs:
+  - create
+- apiGroups:
   - db.mrhachi.dev
   resources:
   - mongodbs
