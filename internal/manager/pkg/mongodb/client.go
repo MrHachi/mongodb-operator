@@ -15,8 +15,10 @@ type Topology struct {
 }
 
 type Member struct {
-	ID   int    `bson:"_id" json:"id"`
-	Host string `bson:"host" json:"host"`
+	ID        int    `bson:"_id" json:"id"`
+	Host      string `bson:"name" json:"host"`
+	State     string `bson:"stateStr" json:"state"`
+	StateCode int    `bson:"state" json:"state_code"`
 }
 
 type Client struct {

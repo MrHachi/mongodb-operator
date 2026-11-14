@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	managerdb "github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
 	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -71,20 +72,24 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 	return token.Status.Token, nil
 }
 
-// GetTopology reports whether the replica set has been initialized.
-func (c *Client) GetTopology(ctx context.Context) error {
+// GetTopology retrieves the replica set topology and member states.
+func (c *Client) GetTopology(ctx context.Context) (*managerdb.Topology, error) {
 	status, body, err := c.request(ctx, http.MethodGet, "/v1/topology", nil)
 	if err != nil {
-		return fmt.Errorf("get topology: %w", err)
+		return nil, fmt.Errorf("get topology: %w", err)
 	}
 
 	switch status {
 	case http.StatusOK:
-		return nil
+		var topology managerdb.Topology
+		if err := json.Unmarshal(body, &topology); err != nil {
+			return nil, fmt.Errorf("decode topology response: %w", err)
+		}
+		return &topology, nil
 	case http.StatusPreconditionFailed:
-		return ErrNotInitialized
+		return nil, ErrNotInitialized
 	default:
-		return responseError("get topology", status, body)
+		return nil, responseError("get topology", status, body)
 	}
 }
 
