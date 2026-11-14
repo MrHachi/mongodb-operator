@@ -241,6 +241,7 @@ func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
 }
 
 func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
+	log := logf.FromContext(ctx)
 	pvcName := fmt.Sprintf("%s-r-%s-data", mongodb.Name, id)
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -269,6 +270,7 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 		return fmt.Errorf("get pvc: %w", err)
 	}
 
+	log.Info("Creating PVC", "name", pvcName)
 	if err := ctrl.SetControllerReference(mongodb, pvc, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on pvc: %w", err)
 	}
@@ -277,6 +279,7 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 }
 
 func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
+	log := logf.FromContext(ctx)
 	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, id)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -356,6 +359,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 		return fmt.Errorf("get replica pod: %w", err)
 	}
 
+	log.Info("Creating replica pod", "name", podName)
 	if err := ctrl.SetControllerReference(mongodb, pod, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on replica pod: %w", err)
 	}
@@ -364,6 +368,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 }
 
 func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	log := logf.FromContext(ctx)
 	serviceName := mongodb.Name
 	service := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: mongodb.Namespace}, service)
@@ -374,6 +379,7 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 		return fmt.Errorf("get headless service: %w", err)
 	}
 
+	log.Info("Creating headless service", "name", serviceName)
 	service = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
