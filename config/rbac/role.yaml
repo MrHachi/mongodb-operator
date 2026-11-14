@@ -7,7 +7,9 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
   - secrets
+  - services
   verbs:
   - create
   - delete
@@ -15,6 +17,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - db.mrhachi.dev

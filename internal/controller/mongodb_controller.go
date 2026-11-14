@@ -17,9 +17,15 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,6 +41,12 @@ import (
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 )
 
+const (
+	adminUsernameKey  = "username"
+	adminPasswordKey  = "password"
+	keyfileVolumeName = "keyfile"
+)
+
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
 	client.Client
@@ -45,6 +57,8 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -124,19 +138,149 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 		return ctrl.Result{}, fmt.Errorf("ensureHeadlessService: %w", err)
 	}
 
-	// 2. Cluster Bootstrapping
-	// - Wait for Primary Pod to be Ready (requeue every 15s if not)
-	// - RS Initiation:
-	//     - Check RS status (GET /v1/topology)
-	//     - Execute RS Initiation if not initialized (POST /v1/initiate)
-	// - Admin User Creation:
-	//     - Check if admin user is authenticated (POST /v1/authenticate)
-	//     - Execute Admin User Creation if unauthenticated (POST /v1/admin)
+	adminSecret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure admin credentials secret: %w", err)
+	}
 
-	// 3. Transition
-	// - Update status.phase to "Scaling"
+	pod := &corev1.Pod{}
+	podName := fmt.Sprintf("%s-r-a", mongodb.Name)
+	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
+		return ctrl.Result{}, fmt.Errorf("get primary pod: %w", err)
+	}
+	if !podReady(pod) || pod.Status.PodIP == "" {
+		log.Info("Waiting for primary pod to become ready", "name", podName)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 
+	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("read operator service account token: %w", err)
+	}
+
+	managerURL := fmt.Sprintf("http://%s:8080", pod.Status.PodIP)
+	topologyStatus, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodGet, "/v1/topology", nil)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
+	}
+	if topologyStatus == http.StatusPreconditionFailed {
+		status, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/initiate", nil)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("initiate replica set: %w", err)
+		}
+		if status != http.StatusOK && status != http.StatusConflict {
+			return ctrl.Result{}, fmt.Errorf("initiate replica set returned unexpected status %d", status)
+		}
+		log.Info("Initiated MongoDB replica set", "name", mongodb.Name)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	if topologyStatus != http.StatusOK {
+		return ctrl.Result{}, fmt.Errorf("get replica set topology returned unexpected status %d", topologyStatus)
+	}
+
+	credentials := map[string]string{
+		adminUsernameKey: string(adminSecret.Data[adminUsernameKey]),
+		adminPasswordKey: string(adminSecret.Data[adminPasswordKey]),
+	}
+	credentialsBody, err := json.Marshal(credentials)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("encode admin credentials: %w", err)
+	}
+	authBody, err := json.Marshal(map[string]string{
+		adminUsernameKey: credentials[adminUsernameKey],
+		adminPasswordKey: credentials[adminPasswordKey],
+		"auth_source":    "admin",
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("encode authentication request: %w", err)
+	}
+	authStatus, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/authenticate", authBody)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("authenticate admin user: %w", err)
+	}
+	if authStatus == http.StatusUnauthorized {
+		status, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/admin", credentialsBody)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("create admin user: %w", err)
+		}
+		if status != http.StatusOK && status != http.StatusConflict {
+			return ctrl.Result{}, fmt.Errorf("create admin user returned unexpected status %d", status)
+		}
+		authStatus, err = requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/authenticate", authBody)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("authenticate newly created admin user: %w", err)
+		}
+	}
+	if authStatus != http.StatusOK {
+		return ctrl.Result{}, fmt.Errorf("authenticate admin user returned unexpected status %d", authStatus)
+	}
+
+	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
+	mongodb.Status.Phase = "Scaling"
+	if err := r.Status().Update(ctx, mongodb); err != nil {
+		return ctrl.Result{}, fmt.Errorf("set scaling status: %w", err)
+	}
 	return ctrl.Result{}, nil
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func requestInstanceManager(ctx context.Context, baseURL, token, namespace, method, path string, body []byte) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Kubernetes-Namespace", namespace)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, nil
+}
+
+func (r *MongoDBReconciler) ensureAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
+	secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret)
+	if err == nil {
+		if len(secret.Data[adminUsernameKey]) == 0 || len(secret.Data[adminPasswordKey]) == 0 {
+			return nil, fmt.Errorf("secret %s is missing username or password", secretName)
+		}
+		return secret, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("get admin credentials secret: %w", err)
+	}
+
+	password := make([]byte, 32)
+	if _, err := rand.Read(password); err != nil {
+		return nil, fmt.Errorf("generate admin password: %w", err)
+	}
+	secret = &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: mongodb.Namespace, Labels: r.labels(mongodb)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{adminUsernameKey: []byte("admin"), adminPasswordKey: []byte(hex.EncodeToString(password))},
+	}
+	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set owner reference on admin credentials secret: %w", err)
+	}
+	if err := r.Create(ctx, secret); err != nil {
+		return nil, fmt.Errorf("create admin credentials secret: %w", err)
+	}
+	return secret, nil
 }
 
 func (r *MongoDBReconciler) labels(mongodb *dbv1beta1.MongoDB, custom ...string) map[string]string {
@@ -299,7 +443,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 					Command: []string{"sh", "-c", "chown 999:999 /data/configdb/mongodb.key && chmod 0600 /data/configdb/mongodb.key"},
 					VolumeMounts: []corev1.VolumeMount{
 						{
-							Name:      "keyfile",
+							Name:      keyfileVolumeName,
 							MountPath: "/data/configdb",
 						},
 					},
@@ -324,7 +468,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 							MountPath: "/data/db",
 						},
 						{
-							Name:      "keyfile",
+							Name:      keyfileVolumeName,
 							MountPath: "/data/configdb",
 						},
 					},
@@ -332,7 +476,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			},
 			Volumes: []corev1.Volume{
 				{
-					Name: "keyfile",
+					Name: keyfileVolumeName,
 					VolumeSource: corev1.VolumeSource{
 						Secret: &corev1.SecretVolumeSource{
 							SecretName: fmt.Sprintf("%s-keyfile", mongodb.Name),
