@@ -4,6 +4,8 @@ import (
 	"os"
 )
 
+const InstanceManagerAudience = "db.mrhachi.dev/mongodb/instance-manager"
+
 type Config struct {
 	RSName      string
 	Hostname    string

@@ -9,6 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
 )
 
 const (
@@ -32,7 +34,8 @@ func NewAuthenticator(config *rest.Config) (*Authenticator, error) {
 func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespace, verb string) error {
 	tokenReview := &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{
-			Token: token,
+			Token:     token,
+			Audiences: []string{config.InstanceManagerAudience},
 		},
 	}
 
