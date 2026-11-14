@@ -8,6 +8,8 @@ This document outlines the design and architectural decisions for the MongoDB op
 
 The central controller that manages the lifecycle of MongoDB clusters through a reconciliation loop. It transitions the custom resource (CR) through different phases (e.g., `Initializing`, `Scaling`, `Ready`, `Degraded`).
 
+**Note on Pod Management**: The operator does **not** use `StatefulSets` for pod management. Instead, it manages Pods directly to allow granular control over which members are removed during scaling-in, ensuring they are not deleted while the database is in an unstable replication state.
+
 ### Instance-Manager Sidecar
 
 A Go-based service (using the Chi router) deployed as a sidecar container within each MongoDB Pod.
@@ -42,8 +44,6 @@ This phase focuses on setting up the first primary node and the foundational clu
 ### 2. Scaling Phase (`status.phase = Scaling`)
 
 Handles the addition or removal of members from the replica set.
-
-- **Note on Pod Management**: The operator does **not** use `StatefulSets` for pod management. Instead, it manages Pods directly to allow granular control over which members are removed during scaling-in, ensuring they are not deleted while the database is in an unstable replication state.
 
 ## Security & RBAC
 
