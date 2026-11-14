@@ -13,8 +13,15 @@ const (
 )
 
 type Topology struct {
-	Members       []Member `bson:"members" json:"members"`
-	ConfigVersion int32    `bson:"configVersion" json:"config_version"`
+	Members       []Member        `bson:"members" json:"members"`
+	ConfigVersion int32           `bson:"configVersion" json:"config_version"`
+	Optimes       TopologyOptimes `bson:"optimes" json:"optimes"`
+}
+
+// TopologyOptimes contains replica-set-wide optimes reported by replSetGetStatus.
+type TopologyOptimes struct {
+	LastCommittedOptime   Optime    `bson:"lastCommittedOpTime" json:"last_committed"`
+	LastCommittedWallTime time.Time `bson:"lastCommittedWallTime" json:"last_committed_wall_time"`
 }
 
 type Member struct {

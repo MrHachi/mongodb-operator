@@ -60,7 +60,7 @@ Creates the administrative user for the MongoDB instance.
 
 ### 3. Get Cluster Topology
 
-Retrieves the current MongoDB replica set status, including member states, applied and durable optimes, and replication lag derived from the primary's applied optime.
+Retrieves the current MongoDB replica set status, including member states, applied and durable optimes, replication lag derived from the primary's applied optime, and the replica-set-wide majority-commit optime reported by the responding member.
 
 - **Endpoint**: `GET /v1/mongo/topology`
 - **Description**: Returns the `replSetGetStatus` view. Configuration is returned separately by `GET /v1/mongo/config`.
@@ -68,6 +68,10 @@ Retrieves the current MongoDB replica set status, including member states, appli
     ```json
     {
         "config_version": 3,
+        "optimes": {
+            "last_committed": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},
+            "last_committed_wall_time": "2024-03-09T16:00:00Z"
+        },
         "members": [
         {
             "id": 0,

@@ -19,11 +19,13 @@ package controller
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,9 +35,19 @@ import (
 )
 
 const (
-	drainingPodAnnotation = "db.mrhachi.dev/draining"
-	defaultDrainThreshold = 30 * time.Second
+	drainingPodAnnotation        = "db.mrhachi.dev/draining"
+	drainingCheckpointAnnotation = "db.mrhachi.dev/draining-checkpoint"
+	defaultDrainThreshold        = 30 * time.Second
 )
+
+var errMajorityCommitCheckpointUnavailable = errors.New("primary majority-commit checkpoint is unavailable")
+
+type drainCheckpoint struct {
+	TimestampSeconds   uint32    `json:"timestamp_seconds"`
+	TimestampIncrement uint32    `json:"timestamp_increment"`
+	Term               int64     `json:"term"`
+	WallTime           time.Time `json:"wall_time"`
+}
 
 func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
 	if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
@@ -282,7 +294,105 @@ func (r *MongoDBReconciler) resumeScaleIn(ctx context.Context, mongodb *dbv1beta
 	if !ok {
 		return r.waitForReconciliation(ctx, mongodb, "LeadershipTransferPending", fmt.Sprintf("Scale-in is waiting for leadership to move away from Pod %s", pod.Name), 15*time.Second)
 	}
-	return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Scale-in of Pod %s is awaiting the checkpoint and topology drain steps", pod.Name), 15*time.Second)
+
+	pods, err := r.listManagedReplicaPods(ctx, mongodb)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list managed replica Pods while resuming scale-in: %w", err)
+	}
+
+	topology, _, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	if err != nil {
+		// TODO: we will likely want to either waitForReconciliation or return a ReconciliationError, depending on the content of the error returned
+		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-in is waiting for a current replica set topology: %v", err), 15*time.Second)
+	}
+
+	checkpoint, err := r.ensureDrainCheckpoint(ctx, pod, topology.Optimes.LastCommittedOptime, topology.Optimes.LastCommittedWallTime)
+	if err != nil {
+		if errors.Is(err, errMajorityCommitCheckpointUnavailable) {
+			return r.waitForReconciliation(ctx, mongodb, "DrainCheckpointUnavailable", "Scale-in is waiting for the primary to report a majority-commit checkpoint", 15*time.Second)
+		}
+		return ctrl.Result{}, fmt.Errorf("ensure drain checkpoint for Pod %s: %w", pod.Name, err)
+	}
+
+	member := topologyMemberForPod(topology, pods, pod)
+	if member == nil {
+		return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Scale-in is waiting for Pod %s to appear in the replica set topology", pod.Name), 15*time.Second)
+	}
+
+	if !optimeAtLeast(member.Optimes.DurableOptime, checkpoint.optime()) {
+		return r.waitForReconciliation(ctx, mongodb, "DrainCheckpointPending", fmt.Sprintf("Scale-in is waiting for Pod %s durable optime to reach the captured majority-commit checkpoint", pod.Name), 15*time.Second)
+	}
+	return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Pod %s reached the drain checkpoint; member removal is not implemented yet", pod.Name), 15*time.Second)
+}
+
+func (r *MongoDBReconciler) ensureDrainCheckpoint(ctx context.Context, pod *corev1.Pod, optime mdb.Optime, wallTime time.Time) (drainCheckpoint, error) {
+	if value, ok := pod.Annotations[drainingCheckpointAnnotation]; ok {
+		var checkpoint drainCheckpoint
+		if err := json.Unmarshal([]byte(value), &checkpoint); err != nil {
+			return drainCheckpoint{}, fmt.Errorf("decode persisted checkpoint annotation: %w", err)
+		}
+		if !checkpoint.valid() {
+			return drainCheckpoint{}, errors.New("persisted checkpoint annotation is invalid")
+		}
+		return checkpoint, nil
+	}
+
+	checkpoint := drainCheckpoint{
+		TimestampSeconds:   optime.Timestamp.T,
+		TimestampIncrement: optime.Timestamp.I,
+		Term:               optime.Term,
+		WallTime:           wallTime,
+	}
+	if !checkpoint.valid() {
+		return drainCheckpoint{}, errMajorityCommitCheckpointUnavailable
+	}
+
+	value, err := json.Marshal(checkpoint)
+	if err != nil {
+		return drainCheckpoint{}, fmt.Errorf("encode checkpoint annotation: %w", err)
+	}
+
+	before := pod.DeepCopy()
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	pod.Annotations[drainingCheckpointAnnotation] = string(value)
+
+	if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
+		return drainCheckpoint{}, fmt.Errorf("persist checkpoint annotation on Pod %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
+	return checkpoint, nil
+}
+
+func (c drainCheckpoint) optime() mdb.Optime {
+	return mdb.Optime{
+		Timestamp: primitive.Timestamp{T: c.TimestampSeconds, I: c.TimestampIncrement},
+		Term:      c.Term,
+	}
+}
+
+func (c drainCheckpoint) valid() bool {
+	return c.TimestampSeconds != 0 && !c.WallTime.IsZero()
+}
+
+func optimeAtLeast(current, checkpoint mdb.Optime) bool {
+	if current.Term != -1 && checkpoint.Term != -1 && current.Term != checkpoint.Term {
+		return current.Term > checkpoint.Term
+	}
+	if current.Timestamp.T != checkpoint.Timestamp.T {
+		return current.Timestamp.T > checkpoint.Timestamp.T
+	}
+	return current.Timestamp.I >= checkpoint.Timestamp.I
+}
+
+func topologyMemberForPod(topology *mdb.Topology, pods []corev1.Pod, pod *corev1.Pod) *mdb.Member {
+	for i := range topology.Members {
+		memberPod := podForMember(pods, topology.Members[i].Host)
+		if memberPod != nil && memberPod.Name == pod.Name {
+			return &topology.Members[i]
+		}
+	}
+	return nil
 }
 
 // ensureInstanceManagerLeadershipAwayFrom requests a transfer from the draining
