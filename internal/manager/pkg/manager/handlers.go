@@ -168,6 +168,27 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	config, err := client.GetConfig(r.Context())
+	if err != nil {
+		if strings.Contains(err.Error(), "cluster not initialized") {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(config); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 type AuthenticationRequest struct {
 	Username   string `json:"username"`
 	Password   string `json:"password"`

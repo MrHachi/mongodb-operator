@@ -23,7 +23,7 @@ var (
 	ErrUnauthenticated = errors.New("admin credentials are unauthenticated")
 )
 
-const responseBodyLimit = 4096
+const responseBodyLimit = 1 << 20
 
 // Client calls the HTTP API exposed by an instance-manager sidecar.
 type Client struct {
@@ -91,6 +91,26 @@ func (c *Client) GetTopology(ctx context.Context) (*managerdb.Topology, error) {
 		return nil, ErrNotInitialized
 	default:
 		return nil, responseError("get topology", status, body)
+	}
+}
+
+// GetConfig retrieves the replica set voting and election configuration.
+func (c *Client) GetConfig(ctx context.Context) (*managerdb.ReplicaSetConfig, error) {
+	status, body, err := c.request(ctx, http.MethodGet, "/v1/config", nil)
+	if err != nil {
+		return nil, fmt.Errorf("get replica set configuration: %w", err)
+	}
+	switch status {
+	case http.StatusOK:
+		var config managerdb.ReplicaSetConfig
+		if err := json.Unmarshal(body, &config); err != nil {
+			return nil, fmt.Errorf("decode replica set configuration response: %w", err)
+		}
+		return &config, nil
+	case http.StatusPreconditionFailed:
+		return nil, ErrNotInitialized
+	default:
+		return nil, responseError("get replica set configuration", status, body)
 	}
 }
 

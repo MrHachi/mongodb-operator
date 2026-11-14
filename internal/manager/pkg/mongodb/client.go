@@ -7,33 +7,15 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type Topology struct {
-	Members []Member `bson:"members" json:"members"`
-}
-
-type Member struct {
-	ID        int    `bson:"_id" json:"id"`
-	Host      string `bson:"name" json:"host"`
-	State     string `bson:"stateStr" json:"state"`
-	StateCode int    `bson:"state" json:"state_code"`
-
-	AppliedOptime         Optime        `bson:"optime" json:"applied_optime"`
-	DurableOptime         Optime        `bson:"optimeDurable" json:"durable_optime"`
-	AppliedAt             time.Time     `bson:"optimeDate" json:"applied_at"`
-	DurableAt             time.Time     `bson:"optimeDurableDate" json:"durable_at"`
-	ReplicationLagSeconds time.Duration `bson:"-" json:"replication_lag_seconds,omitempty"`
-}
-
-// Optime identifies an operation in the replica set oplog.
-type Optime struct {
-	Timestamp primitive.Timestamp `bson:"ts" json:"timestamp"`
-	Term      int64               `bson:"t" json:"term"`
-}
+const (
+	StatePrimary   = "PRIMARY"
+	StateSecondary = "SECONDARY"
+	StateArbiter   = "ARBITER"
+)
 
 type Client struct {
 	client *mongo.Client
@@ -153,8 +135,8 @@ func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
 
 	var primaryAppliedAt time.Time
 	for _, member := range topology.Members {
-		if member.State == "PRIMARY" {
-			primaryAppliedAt = member.AppliedAt
+		if member.State == StatePrimary {
+			primaryAppliedAt = member.Optimes.AppliedAt
 			break
 		}
 	}
@@ -162,17 +144,47 @@ func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
 	if !primaryAppliedAt.IsZero() {
 		for i := range topology.Members {
 			member := &topology.Members[i]
-			if member.State != "SECONDARY" || member.AppliedAt.IsZero() {
+			if member.State != StateSecondary || member.Optimes.AppliedAt.IsZero() {
 				continue
 			}
-
-			lag := primaryAppliedAt.Sub(member.AppliedAt)
-			if lag < 0 {
-				lag = 0
-			}
-			member.ReplicationLagSeconds = lag
+			member.ReplicationLag = max(primaryAppliedAt.Sub(member.Optimes.AppliedAt), 0)
+			member.LagAvailable = true
 		}
 	}
-
 	return &topology, nil
+}
+
+// GetConfig retrieves the replica set voting and election configuration.
+func (c *Client) GetConfig(ctx context.Context) (*ReplicaSetConfig, error) {
+	db := c.client.Database("admin")
+	var configResponse struct {
+		Config struct {
+			Version int32 `bson:"version"`
+			Members []struct {
+				ID           int `bson:"_id"`
+				MemberConfig `bson:",inline"`
+			} `bson:"members"`
+		} `bson:"config"`
+	}
+	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&configResponse); err != nil {
+		return nil, fmt.Errorf("cluster not initialized: get replica set configuration: %w", err)
+	}
+	config := &ReplicaSetConfig{Version: configResponse.Config.Version, Members: make([]ReplicaSetConfigMember, 0, len(configResponse.Config.Members))}
+	for _, member := range configResponse.Config.Members {
+		if member.Votes == nil {
+			votes := int32(1)
+			member.Votes = &votes
+		}
+		if member.Priority == nil {
+			priority := 1.0
+			if member.ArbiterOnly {
+				priority = 0
+			}
+			member.Priority = &priority
+		}
+		member.ConfigVersion = configResponse.Config.Version
+		member.VotingEligible = *member.Votes > 0 && !member.ArbiterOnly && !member.Hidden && *member.Priority > 0
+		config.Members = append(config.Members, ReplicaSetConfigMember{ID: member.ID, Config: member.MemberConfig})
+	}
+	return config, nil
 }

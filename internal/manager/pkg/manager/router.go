@@ -15,6 +15,7 @@ func (h *InstanceManager) Serve() *chi.Mux {
 			r.Use(h.RequirePermission("get", "db.mrhachi.dev", "mongodbs"))
 			r.Post("/authenticate", h.HandleAuthenticate)
 			r.Get("/topology", h.HandleGetTopology)
+			r.Get("/config", h.HandleGetConfig)
 		})
 
 		// Routes that require 'create' permission on 'mongodbs' in 'db.mrhachi.dev'

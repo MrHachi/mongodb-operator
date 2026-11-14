@@ -58,19 +58,28 @@ Creates the administrative user for the MongoDB instance.
 
 ### 3. Get Cluster Topology
 
-Retrieves the current MongoDB replica set topology.
+Retrieves the current MongoDB replica set status, including member states, applied and durable optimes, and replication lag derived from the primary's applied optime.
 
 - **Endpoint**: `GET /v1/topology`
-- **Description**: Returns the replica set members and each member's raw MongoDB state.
+- **Description**: Returns the `replSetGetStatus` view. Configuration is returned separately by `GET /v1/config`.
 - **Response Body**:
     ```json
     {
+        "config_version": 3,
         "members": [
         {
             "id": 0,
             "host": "mongodb-0.example.com:27017",
             "state": "PRIMARY",
-            "state_code": 1
+            "state_code": 1,
+            "optimes": {
+                "applied": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},
+                "durable": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},
+                "applied_at": "2024-03-09T16:00:00Z",
+                "durable_at": "2024-03-09T16:00:00Z"
+            },
+            "replication_lag": 0,
+            "lag_available": true
         },
         ...
         ]
@@ -80,7 +89,34 @@ Retrieves the current MongoDB replica set topology.
     - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
     - `500 Internal Server Error`: For other server-side errors.
 
-### 4. Authenticate
+### 4. Get Replica Set Configuration
+
+Retrieves the current replica set voting and election configuration.
+
+- **Endpoint**: `GET /v1/config`
+- **Description**: Returns the `replSetGetConfig` settings, including each member's voting eligibility, votes, priority, and arbiter/hidden flags. `replication_lag` in the topology response is an integer number of nanoseconds because it is serialized from Go's `time.Duration`.
+- **Response Body**:
+    ```json
+    {
+        "version": 3,
+        "members": [
+            {
+                "id": 0,
+                "config": {
+                    "version": 3,
+                    "votes": 1,
+                    "priority": 1,
+                    "voting_eligible": true
+                }
+            }
+        ]
+    }
+    ```
+- **Errors**:
+    - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
+    - `500 Internal Server Error`: For other server-side errors.
+
+### 5. Authenticate
 
 Authenticates with the MongoDB instance and updates the connection credentials for subsequent requests.
 
