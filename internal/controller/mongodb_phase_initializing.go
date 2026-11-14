@@ -91,11 +91,13 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable")
-	default:
+	case discoveryPodsWithoutPrimary:
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available")
+	default:
+		return ctrl.Result{}, fmt.Errorf("discover replica set primary: unexpected discovery state %d", discovery.State)
 	}
 
 	// Proceed with MongoDB cluster reconciliation, creating a new admin secret if we determined that this isn't a pre-existing cluster (no primary discovered)
@@ -118,13 +120,21 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
 		if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, adminSecret); err != nil {
 			if apierrors.IsNotFound(err) {
-				return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonCredentialsMissing, "Admin credentials Secret is missing")
+				return ctrl.Result{}, &ReconciliationError{
+					Reason:  dbv1beta1.ReasonCredentialsMissing,
+					Message: fmt.Sprintf("Admin credentials Secret %s/%s is missing; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName),
+					Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+				}
 			}
 			return ctrl.Result{}, fmt.Errorf("get admin credentials secret: %w", err)
 		}
 
 		if len(adminSecret.Data[adminUsernameKey]) == 0 || len(adminSecret.Data[adminPasswordKey]) == 0 {
-			return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonCredentialsIncomplete, "Admin credentials Secret is missing username or password")
+			return ctrl.Result{}, &ReconciliationError{
+				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
+				Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
 		}
 	} else {
 		secret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
@@ -146,8 +156,17 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	managerClient := r.managerClientForPod(pod)
 	topology, err := managerClient.GetTopology(ctx)
 	if errors.Is(err, managerclient.ErrNotInitialized) {
+		// TODO: The instance manager currently maps every replSetGetStatus failure
+		// to ErrNotInitialized. Distinguish actual uninitialized state from other
+		// command failures, and rediscover unexpected uninitialized members before
+		// classifying a persistent block. Gate initiation on explicit bootstrap
+		// eligibility rather than only the Pod name.
 		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
-			return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonReplicaSetUninitialized, "Existing member reports an uninitialized replica set")
+			return ctrl.Result{}, &ReconciliationError{
+				Reason:  dbv1beta1.ReasonReplicaSetUninitialized,
+				Message: fmt.Sprintf("Instance manager for Pod %s/%s reports an uninitialized replica set; refusing automatic initiation of a non-bootstrap member", mongodb.Namespace, podName),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
 		}
 		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonInitiatingReplicaSet); err != nil {
 			return ctrl.Result{}, err
@@ -186,14 +205,6 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
-}
-
-func (r *MongoDBReconciler) markDegraded(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) (ctrl.Result, error) {
-	if err := r.setDegradedStatus(ctx, mongodb, reason, message); err != nil {
-		return ctrl.Result{}, err
-	}
-	logf.FromContext(ctx).Info("MongoDB cluster is degraded; attempting recovery", "name", mongodb.Name, "reason", reason, "message", message)
-	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 }
 
 func (r *MongoDBReconciler) transitionInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason dbv1beta1.ProgressReason) error {
