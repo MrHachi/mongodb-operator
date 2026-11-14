@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const MongoDBKind = "MongoDB"
+
 // MongoDBPhase represents a phase in the MongoDB cluster lifecycle.
 type MongoDBPhase string
 

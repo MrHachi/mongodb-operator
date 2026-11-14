@@ -67,7 +67,7 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 	managedPods := make([]corev1.Pod, 0, len(podList.Items))
 	for _, pod := range podList.Items {
 		for _, owner := range pod.OwnerReferences {
-			if owner.UID == mongodb.UID && owner.Kind == "MongoDB" {
+			if owner.UID == mongodb.UID && owner.Kind == dbv1beta1.MongoDBKind {
 				managedPods = append(managedPods, pod)
 			}
 		}

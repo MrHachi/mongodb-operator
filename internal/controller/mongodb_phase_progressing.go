@@ -77,7 +77,7 @@ func (r *MongoDBReconciler) listManagedReplicaPods(ctx context.Context, mongodb 
 	for i := range list.Items {
 		pod := &list.Items[i]
 		for _, owner := range pod.OwnerReferences {
-			if owner.UID == mongodb.UID && owner.Kind == "MongoDB" {
+			if owner.UID == mongodb.UID && owner.Kind == dbv1beta1.MongoDBKind {
 				pods = append(pods, *pod.DeepCopy())
 				break
 			}
