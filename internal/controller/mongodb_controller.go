@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kubeclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,12 +54,20 @@ const (
 	keyfileVolumeName = "keyfile"
 )
 
+var (
+	errObservedGenerationChanged = errors.New("MongoDB generation changed during reconciliation")
+)
+
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
 	client.Client
+
 	Scheme     *runtime.Scheme
 	KubeClient kubeclient.Interface
 	Config     *controllerconfig.Config
+
+	// Reads directly from the Kubernetes API, bypassing the manager's cache (for use in updateStatus)
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs,verbs=get;list;watch;create;update;patch;delete
@@ -78,7 +88,14 @@ type MongoDBReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
-func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
+	defer func() {
+		if errors.Is(reconcileErr, errObservedGenerationChanged) {
+			result = ctrl.Result{Requeue: true}
+			reconcileErr = nil
+		}
+	}()
+
 	log := logf.FromContext(ctx)
 
 	mongodb := &dbv1beta1.MongoDB{}
@@ -154,22 +171,48 @@ func (r *MongoDBReconciler) setReadyStatus(ctx context.Context, mongodb *dbv1bet
 	})
 }
 
+// updateStatus retries status writes against the latest MongoDB resource and
+// aborts if its generation has changed since this reconciliation observed it.
+// On success, it refreshes mongodb in place with the latest resource version
+// and status, which is visible to the caller and any later status writes.
 func (r *MongoDBReconciler) updateStatus(
 	ctx context.Context,
 	mongodb *dbv1beta1.MongoDB,
 	phase dbv1beta1.MongoDBPhase,
 	conditions []metav1.Condition,
 ) error {
-	before := mongodb.DeepCopy()
-	mongodb.Status.Phase = phase
-	for _, condition := range conditions {
-		condition.ObservedGeneration = mongodb.Generation
-		apiMeta.SetStatusCondition(&mongodb.Status.Conditions, condition)
+	observedGeneration := mongodb.Generation
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
 	}
-	if equality.Semantic.DeepEqual(before.Status, mongodb.Status) {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &dbv1beta1.MongoDB{}
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(mongodb), latest); err != nil {
+			return err
+		}
+		if latest.Generation != observedGeneration {
+			return errObservedGenerationChanged
+		}
+
+		before := latest.DeepCopy()
+		latest.Status.Phase = phase
+		for _, condition := range conditions {
+			condition.ObservedGeneration = latest.Generation
+			apiMeta.SetStatusCondition(&latest.Status.Conditions, condition)
+		}
+		if equality.Semantic.DeepEqual(before.Status, latest.Status) {
+			*mongodb = *latest
+			return nil
+		}
+
+		if err := r.Status().Update(ctx, latest); err != nil {
+			return err
+		}
+		*mongodb = *latest
 		return nil
-	}
-	if err := r.Status().Update(ctx, mongodb); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("update MongoDB status: %w", err)
 	}
 	return nil
@@ -513,6 +556,9 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Config.ServiceAccountNamespace == "" || r.Config.ServiceAccountName == "" {
 		return fmt.Errorf("POD_NAMESPACE and SERVICE_ACCOUNT_NAME must be configured")
+	}
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
