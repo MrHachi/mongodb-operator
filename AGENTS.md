@@ -216,9 +216,12 @@ kubectl logs -n <project>-system deployment/<project>-controller-manager -c mana
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 ```
 
+## Controller Design
+
 **Implementation rules:**
 
 - **Idempotent reconciliation**: Safe to run multiple times
+- **Error Wrapping**: When returning errors from functions, always wrap them using `fmt.Errorf("...: %w", err)` to provide context about the operation that failed. This is critical for debugging and tracing error origins.
 - **Re-fetch before updates**: `r.Get(ctx, req.NamespacedName, obj)` before `r.Update` to avoid conflicts
 - **Structured logging**: `log := log.FromContext(ctx); log.Info("msg", "key", val)`
 - **Owner references**: Enable automatic garbage collection (`SetControllerReference`)

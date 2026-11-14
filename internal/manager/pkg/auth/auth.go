@@ -23,7 +23,7 @@ type Authenticator struct {
 func NewAuthenticator(config *rest.Config) (*Authenticator, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create kubernetes clientset: %w", err)
 	}
 	return &Authenticator{clientset: clientset}, nil
 }

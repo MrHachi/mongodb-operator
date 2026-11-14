@@ -47,7 +47,7 @@ func (m *InstanceManager) RequirePermission(verb, group, resource string) func(h
 			}
 
 			if err := m.authenticator.VerifyOperatorToken(r.Context(), token, namespace, verb); err != nil {
-				http.Error(w, err.Error(), http.StatusForbidden)
+				http.Error(w, fmt.Sprintf("verify operator token: %v", err), http.StatusForbidden)
 				return
 			}
 

@@ -25,7 +25,7 @@ type Client struct {
 func NewClient(ctx context.Context, uri string) (*Client, error) {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("connect to mongodb: %w", err)
 	}
 	return &Client{client: client}, nil
 }
@@ -47,7 +47,7 @@ func (c *Client) InitiateReplicaSet(ctx context.Context, rsName, host string) er
 
 	err := db.RunCommand(ctx, command).Err()
 	if err != nil {
-		return fmt.Errorf("failed to initiate replica set: %w", err)
+		return fmt.Errorf("initiate replica set: %w", err)
 	}
 	return nil
 }
@@ -69,7 +69,7 @@ func (c *Client) CreateAdminUser(ctx context.Context, username, password string)
 		// In MongoDB, error code for duplicate key is 11000, but for createUser it might be different.
 		// Let's check if it's a "user already exists" error.
 		// For now, I'll just return the error but the handler will handle it.
-		return err
+		return fmt.Errorf("create admin user: %w", err)
 	}
 	return nil
 }
