@@ -41,3 +41,12 @@ The MongoDB container has a TCP startup probe on port `27017` with a five-minute
 | :----------- | :------- | :------------------------------------------------------------------------------- |
 | `phase`      | `string` | Current lifecycle phase: `Initializing`, `Progressing`, `Ready`, or `Degraded`.  |
 | `conditions` | `list`   | Standard `metav1.Condition` list reporting state (e.g., `Progressing`, `Ready`). |
+
+### Status conditions (`status.conditions`)
+
+| Condition           | Type   | Description                                                                                          |
+| :------------------ | :----- | :--------------------------------------------------------------------------------------------------- |
+| `Ready`             | `bool` | Flag indicating whether the MongoDB cluster is eligible to serve applications.                       |
+| `Progressing`       | `bool` | Flag indicating whether reconciliation is currently proceeding.                                      |
+| `NeedsIntervention` | `bool` | Flag indicating that manual administrator intervention is required to alleviate service degradation. |
+| `Degraded`          | `bool` | Flag indicating that the MongoDB is currently operating with degraded service quality.               |
