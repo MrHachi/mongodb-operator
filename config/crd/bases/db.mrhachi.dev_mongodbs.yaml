@@ -50,10 +50,12 @@ spec:
               conditions:
                 description: |-
                   Conditions represent the observed state of the MongoDB resource. The operator
-                  maintains Ready, Progressing, and Degraded conditions. Progressing is True
-                  while reconciliation is working toward the desired state, including recovery
-                  from a problem, and its Reason identifies the current operation or problem.
-                  Degraded is reserved for observed cluster problems that block the desired state.
+                  maintains Ready and Progressing conditions. The leader instance-manager maintains
+                  Degraded. Progressing is True while reconciliation is working toward the desired
+                  state, including recovery from a problem, and its Reason identifies the current
+                  operation or problem.
+                  Degraded=True with reason ServiceIssuesPresent means one or more degradation
+                  conditions are set on the cluster.
                   The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
