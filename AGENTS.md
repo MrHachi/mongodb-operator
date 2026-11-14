@@ -172,7 +172,7 @@ make manifests generate
 
 # 2. Build & deploy
 export IMG=<registry>/<project>:tag
-make docker-build docker-push IMG=$IMG  # Or: kind load docker-image $IMG --name <cluster>
+make docker-build docker-push IMG=$IMG IMGR_IMG=$IMGR_IMG # Or: kind load docker-image $IMG --name <cluster>
 make deploy IMG=$IMG
 
 # 3. Test

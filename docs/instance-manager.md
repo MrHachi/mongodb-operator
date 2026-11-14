@@ -20,8 +20,9 @@ The operator's ServiceAccount must have:
 
 - `create` permission on `serviceaccounts/token` for its own ServiceAccount.
 - `create` and `get` permissions for `mongodbs` in the `db.mrhachi.dev` API group.
+- `get`, `create`, `update`, and `delete` permissions for the per-MongoDB ClusterRoleBindings it reconciles.
 
-The MongoDB pod's ServiceAccount must be able to create `tokenreviews` and `subjectaccessreviews` so the sidecar can validate the token and authorize the request.
+MongoDB Pods currently use the namespace's `default` ServiceAccount. During initialization, the operator creates a ClusterRoleBinding from that ServiceAccount to the `instance-manager-auth-role` ClusterRole, which grants only `create` on `tokenreviews` and `subjectaccessreviews`. The binding is removed by a MongoDB finalizer when the resource is deleted. This requires cluster-scoped RBAC; Helm installs must use `rbac.namespaced=false`.
 
 ## API Endpoints
 
