@@ -334,7 +334,11 @@ func (r *MongoDBReconciler) ensureAdminCredentialsSecret(ctx context.Context, mo
 	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret)
 	if err == nil {
 		if len(secret.Data[adminUsernameKey]) == 0 || len(secret.Data[adminPasswordKey]) == 0 {
-			return nil, fmt.Errorf("secret %s is missing username or password", secretName)
+			return nil, &ReconciliationError{
+				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
+				Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
 		}
 		return secret, nil
 	}
@@ -730,6 +734,18 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 
 	if err := ctrl.SetControllerReference(mongodb, service, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on headless service: %w", err)
+	}
+	existing := &corev1.Service{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(service), existing); err == nil {
+		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
+			return &ReconciliationError{
+				Reason:  dbv1beta1.ReasonServiceNotHeadless,
+				Message: fmt.Sprintf("Service %s/%s has clusterIP %q; refusing unsafe in-place conversion to headless", existing.Namespace, existing.Name, existing.Spec.ClusterIP),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get existing service before headless reconciliation: %w", err)
 	}
 	return ensureResource(ctx, r.Client, service, func(existing, desired *corev1.Service) error {
 		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
