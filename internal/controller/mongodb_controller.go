@@ -260,12 +260,6 @@ func (r *MongoDBReconciler) transitionProgressing(ctx context.Context, mongodb *
 	})
 }
 
-func (r *MongoDBReconciler) setDegradedStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) error {
-	return r.updateStatus(ctx, mongodb, mongodb.Status.Phase, []metav1.Condition{
-		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: message},
-	})
-}
-
 func (r *MongoDBReconciler) transitionReady(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
 	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseReady, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionTrue, Reason: dbv1beta1.ReasonReady, Message: "MongoDB cluster is ready"},
