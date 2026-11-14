@@ -228,6 +228,14 @@ kubectl logs -n <project>-system deployment/<project>-controller-manager -c mana
 - **Watch secondary resources**: Use `.Owns()` or `.Watches()`, not just `RequeueAfter`
 - **Finalizers**: Clean up external resources (buckets, VMs, DNS entries)
 
+### Reconciliation waits and errors
+
+Use `waitForReconciliation` when reconciliation is in a valid, potentially temporary state and should observe again after a delay. Examples include waiting for Pods to become Ready, an instance-manager endpoint or MongoDB primary to become available, replication lag to fall within a threshold, or an existing scale-in step to finish. It records `Ready=False` and `Progressing=True`, leaves the phase unchanged, and requeues after the supplied duration. Return its result directly.
+
+Use `ReconciliationError` when a persistent condition prevents the current reconciliation from proceeding safely until the user or another actor changes the resource or environment. Examples include invalid spec values that reach the controller despite API validation, or required credentials that are missing or incomplete. Set a specific `Reason` and actionable `Message`; include only the affected condition types in `Affects`. The controller records those conditions as `False`, clears the returned error, and retries after 15 seconds. Do not mark `Ready=False` unless readiness is actually affected.
+
+Use an ordinary wrapped error for unexpected operational failures, such as Kubernetes API calls failing or an internal operation returning an error. These follow the controller's normal error handling and retry behavior; they should not be represented as a persistent reconciliation condition unless the failure itself is a known, actionable blocked state.
+
 ### Logging
 
 **Follow Kubernetes logging message style guidelines:**
