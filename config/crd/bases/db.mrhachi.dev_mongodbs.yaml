@@ -39,6 +39,11 @@ spec:
           spec:
             description: spec defines the desired state of MongoDB
             properties:
+              drainThreshold:
+                default: 30s
+                description: DrainThreshold is the maximum replication lag for a secondary
+                  to be considered healthy for scale-in.
+                type: string
               replicas:
                 default: 1
                 description: Replicas is the desired number of MongoDB replica Pods,

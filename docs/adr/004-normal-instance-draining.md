@@ -43,7 +43,8 @@ The operator does not perform forced reconfigurations or manage oplog rollbacks.
 A replica is considered "healthy" if:
 
 - It is voting-eligible.
-- Its replication lag is within a defined threshold (ensuring it is not a "zombie" node whose removal would be trivial but whose presence is useless).
+- Its replication lag is known and is at most `drainThreshold` (ensuring it is not a "zombie" node whose removal would be trivial but whose presence is useless).
+- The default `drainThreshold` is 30 seconds. Users may set a different positive duration on the MongoDB resource.
 
 ## Alternatives
 
@@ -53,5 +54,5 @@ This maximizes PVC reusability and minimizes initial syncs. However, it prioriti
 
 ## Open questions
 
-1. What is the maximum allowable lag for a node to be considered "healthy" and eligible for draining?
-2. Should this health threshold be configurable via the Custom Resource API to allow users to tune the trade-off between recovery speed and failover readiness?
+1. **Resolved:** the default maximum lag is 30 seconds.
+2. **Resolved:** `spec.drainThreshold` configures the maximum lag; it defaults to 30 seconds.
