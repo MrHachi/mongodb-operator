@@ -26,6 +26,8 @@ The reconciliation loop follows a state-machine approach to ensure the desired s
 
 This phase focuses on setting up the first primary node and the foundational cluster infrastructure.
 
+- Before creating the initial `-r-a` member, the operator lists managed Pods and queries their instance-manager topology endpoints. If a primary is reported, initialization resumes against that Pod. If managed Pods exist but no primary is reported, the cluster moves to `Degraded` and recovery reconciliation retries discovery. A fresh `-r-a` member is created only when no managed Pods are found.
+
 - **Resource Provisioning**:
     - **Keyfile**: Generates a secure keyfile and stores it in a Kubernetes `Secret`.
     - **Storage**: Provisions a `PersistentVolumeClaim` (PVC) for database data.

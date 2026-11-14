@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -39,7 +40,6 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
-	managerconfig "github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
 )
 
 const (
@@ -86,25 +86,27 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	switch mongodb.Status.Phase {
 	case "":
 		log.Info("New MongoDB cluster", "name", mongodb.Name)
-		mongodb.Status.Phase = "Initializing"
+		mongodb.Status.Phase = dbv1beta1.PhaseInitializing
 		if err := r.Status().Update(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("set initializing status: %w", err)
 		}
 		return ctrl.Result{Requeue: true}, nil
 
-	case "Initializing":
+	case dbv1beta1.PhaseInitializing:
 		log.Info("Initializing MongoDB cluster", "name", mongodb.Name)
-		return r.ReconcileInitializing(ctx, mongodb)
+		return r.reconcileInitializing(ctx, mongodb)
 
-	case "Scaling":
+	case dbv1beta1.PhaseScaling:
 		log.Info("Scaling MongoDB cluster", "name", mongodb.Name)
 		// To be implemented
 		return ctrl.Result{}, nil
 
-	case "Ready":
+	case dbv1beta1.PhaseReady:
+		log.Info("Configuring ready MongoDB cluster", "name", mongodb.Name)
 		return ctrl.Result{}, nil
 
-	case "Degraded":
+	case dbv1beta1.PhaseDegraded:
+		log.Info("Recovering degraded MongoDB cluster", "name", mongodb.Name)
 		return ctrl.Result{}, nil
 
 	default:
@@ -113,55 +115,104 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 }
 
-// ReconcileInitializing handles the initialization phase of the MongoDB cluster.
-func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
+// reconcileInitializing handles the initialization phase of the MongoDB cluster.
+func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling initialization phase", "name", mongodb.Name)
 
-	// 1. Resource Provisioning
-	// - Generate and store Keyfile in a Secret
-	if err := r.ensureKeyfileSecret(ctx, mongodb); err != nil {
-		log.Error(err, "Failed to ensure keyfile secret", "name", mongodb.Name)
-		return ctrl.Result{}, fmt.Errorf("ensureKeyfileSecret: %w", err)
-	}
-
-	// - Provision PVC for database data
-	if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
-		log.Error(err, "Failed to ensure PVC", "name", mongodb.Name, "id", "a")
-		return ctrl.Result{}, fmt.Errorf("ensurePVC: %w", err)
-	}
-
-	// - Deploy the initial primary pod (-r-a)
-	if err := r.ensureReplicaPod(ctx, mongodb, "a"); err != nil {
-		log.Error(err, "Failed to ensure replica pod", "name", mongodb.Name, "id", "a")
-		return ctrl.Result{}, fmt.Errorf("ensureReplicaPod: %w", err)
-	}
-
-	// - Create a Headless Service for intra-cluster communication
-	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
-		log.Error(err, "Failed to ensure headless service", "name", mongodb.Name)
-		return ctrl.Result{}, fmt.Errorf("ensureHeadlessService: %w", err)
-	}
-
-	adminSecret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
+	// Discover existing members before creating the default -r-a member. This
+	// prevents a reset phase from creating a new member beside existing data.
+	discovery, err := r.discoverPrimary(ctx, mongodb)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure admin credentials secret: %w", err)
+		return ctrl.Result{}, fmt.Errorf("discover replica set primary: %w", err)
+	}
+	var pod *corev1.Pod
+	switch discovery.State {
+	case discoveryNoPods:
+		if err := r.ensureKeyfileSecret(ctx, mongodb); err != nil {
+			log.Error(err, "Failed to ensure keyfile secret", "name", mongodb.Name)
+			return ctrl.Result{}, fmt.Errorf("ensure keyfile secret: %w", err)
+		}
+		fallthrough
+	case discoveryBootstrapPod:
+		// Proceed with initializing initial primary
+		if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure initial PVC: %w", err)
+		}
+		if err := r.ensureReplicaPod(ctx, mongodb, "a"); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure initial replica pod: %w", err)
+		}
+		pod = &corev1.Pod{}
+		podName := fmt.Sprintf("%s-r-a", mongodb.Name)
+		if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("get initial pod: %w", err)
+		}
+	case discoveryPrimaryFound:
+		// Given that the cluster is running in RS mode and we have a primary, we assume this cluster is already Initialized
+		// and move on to reconciling the discovered primary node
+		pod = discovery.Primary
+	case discoveryPodsUnreachable:
+		// If we have unreachable nodes, this constitutes an error mode and we transition to Degraded state after ensuring
+		// the headless service is properly set up
+		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
+		}
+		return r.markDegraded(ctx, mongodb, "managed Pod instance-manager endpoints are unavailable")
+	default:
+		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
+		}
+		return r.markDegraded(ctx, mongodb, "managed Pods exist but no primary is available")
 	}
 
-	pod := &corev1.Pod{}
-	podName := fmt.Sprintf("%s-r-a", mongodb.Name)
-	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
-		return ctrl.Result{}, fmt.Errorf("get primary pod: %w", err)
+	// Proceed with MongoDB cluster reconciliation, creating a new admin secret if we determined that this isn't a pre-existing cluster (no primary discovered)
+	return r.reconcileSelectedPrimary(ctx, mongodb, pod, discovery.State != discoveryPrimaryFound)
+}
+
+// reconcileSelectedPrimary is MongoDB-facing reconciliation logic.
+// Using the passed MongoDB primary node (Pod), it ensures that RS mode is initiated and that the admin user exists.
+func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod, createAdminSecret bool) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// This is critical to MongoDB SDAM, so we ensure it as a part of cluster reconciliation
+	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 	}
+
+	var adminSecret *corev1.Secret
+	if !createAdminSecret {
+		adminSecret = &corev1.Secret{}
+		secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
+		if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, adminSecret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return r.markDegraded(ctx, mongodb, "admin credentials secret is missing")
+			}
+			return ctrl.Result{}, fmt.Errorf("get admin credentials secret: %w", err)
+		}
+
+		if len(adminSecret.Data[adminUsernameKey]) == 0 || len(adminSecret.Data[adminPasswordKey]) == 0 {
+			return r.markDegraded(ctx, mongodb, "admin credentials secret is incomplete")
+		}
+	} else {
+		secret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure admin credentials secret: %w", err)
+		}
+		adminSecret = secret
+	}
+
+	podName := pod.Name
 	if !podReady(pod) || pod.Status.PodIP == "" {
 		log.Info("Waiting for primary pod to become ready", "name", podName)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	managerURL := fmt.Sprintf("http://%s:8080", pod.Status.PodIP)
-	managerClient := managerclient.New(managerURL, r.KubeClient, r.ServiceAccountNamespace, r.ServiceAccountName, managerconfig.InstanceManagerAudience)
-	err = managerClient.GetTopology(ctx)
+	managerClient := r.managerClientForPod(pod)
+	topology, err := managerClient.GetTopology(ctx)
 	if errors.Is(err, managerclient.ErrNotInitialized) {
+		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
+			return r.markDegraded(ctx, mongodb, "existing member reports an uninitialized replica set")
+		}
 		if err := managerClient.Initiate(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("initiate replica set: %w", err)
 		}
@@ -170,6 +221,9 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 	}
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
+	}
+	if !topologyHasPrimary(topology) {
+		return r.markDegraded(ctx, mongodb, "replica set reports no PRIMARY member")
 	}
 
 	username := string(adminSecret.Data[adminUsernameKey])
@@ -186,11 +240,27 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 	}
 
 	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
-	mongodb.Status.Phase = "Scaling"
+	mongodb.Status.Phase = dbv1beta1.PhaseScaling
 	if err := r.Status().Update(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set scaling status: %w", err)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *MongoDBReconciler) markDegraded(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason string) (ctrl.Result, error) {
+	if mongodb.Status.Phase != dbv1beta1.PhaseDegraded {
+		mongodb.Status.Phase = dbv1beta1.PhaseDegraded
+		if err := r.Status().Update(ctx, mongodb); err != nil {
+			return ctrl.Result{}, fmt.Errorf("set degraded status: %w", err)
+		}
+	}
+	logf.FromContext(ctx).Info("MongoDB cluster is degraded; retrying recovery", "name", mongodb.Name, "reason", reason)
+	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+}
+
+func (r *MongoDBReconciler) managerClientForPod(pod *corev1.Pod) *managerclient.Client {
+	managerURL := "http://" + net.JoinHostPort(pod.Status.PodIP, "8080")
+	return managerclient.New(managerURL, r.KubeClient, r.ServiceAccountNamespace, r.ServiceAccountName)
 }
 
 func podReady(pod *corev1.Pod) bool {
