@@ -85,14 +85,10 @@ func ProgressReasonMessage(reason ProgressReason) (string, bool) {
 
 // MongoDBSpec defines the desired state of MongoDB
 type MongoDBSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of MongoDB. Edit mongodb_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// Replicas is the desired number of MongoDB replica Pods, including the initial member.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	Replicas int32 `json:"replicas"`
 }
 
 // MongoDBStatus defines the observed state of MongoDB.
