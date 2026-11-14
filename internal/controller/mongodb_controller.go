@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -132,7 +133,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	switch mongodb.Status.Phase {
 	case "":
 		log.Info("New MongoDB cluster", "name", mongodb.Name)
-		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -144,25 +145,21 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	case dbv1beta1.PhaseProgressing:
 		log.Info("Reconciling MongoDB cluster", "name", mongodb.Name)
 		// To be implemented
-		if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+		if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 
 	case dbv1beta1.PhaseReady:
 		log.Info("Configuring ready MongoDB cluster", "name", mongodb.Name)
-		if err := r.setReadyStatus(ctx, mongodb); err != nil {
+		if err := r.transitionReady(ctx, mongodb); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 
-	case dbv1beta1.PhaseDegraded:
-		log.Info("Recovering degraded MongoDB cluster", "name", mongodb.Name)
-		return ctrl.Result{}, nil
-
 	default:
 		log.Info("Migrating unknown phase to Progressing", "phase", mongodb.Status.Phase)
-		if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+		if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -170,12 +167,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 }
 
 func containsFinalizer(finalizers []string, finalizer string) bool {
-	for _, existing := range finalizers {
-		if existing == finalizer {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(finalizers, finalizer)
 }
 
 func removeFinalizer(finalizers []string, finalizer string) []string {
@@ -246,7 +238,7 @@ func (r *MongoDBReconciler) deleteInstanceManagerBinding(ctx context.Context, mo
 	return nil
 }
 
-func (r *MongoDBReconciler) setProgressingStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, phase dbv1beta1.MongoDBPhase, reason dbv1beta1.ProgressReason) error {
+func (r *MongoDBReconciler) transitionProgressing(ctx context.Context, mongodb *dbv1beta1.MongoDB, phase dbv1beta1.MongoDBPhase, reason dbv1beta1.ProgressReason) error {
 	message, ok := dbv1beta1.ProgressReasonMessage(reason)
 	if !ok {
 		return fmt.Errorf("get message for progress reason %q: unknown reason", reason)
@@ -259,14 +251,13 @@ func (r *MongoDBReconciler) setProgressingStatus(ctx context.Context, mongodb *d
 }
 
 func (r *MongoDBReconciler) setDegradedStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) error {
-	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseDegraded, []metav1.Condition{
-		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonDegraded, Message: message},
-		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNotProgressing, Message: "Reconciliation is blocked by a cluster problem"},
+	return r.updateStatus(ctx, mongodb, mongodb.Status.Phase, []metav1.Condition{
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: reason, Message: "Reconciliation is working to recover from a cluster problem"},
 		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: message},
 	})
 }
 
-func (r *MongoDBReconciler) setReadyStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+func (r *MongoDBReconciler) transitionReady(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
 	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseReady, []metav1.Condition{
 		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionTrue, Reason: dbv1beta1.ReasonReady, Message: "MongoDB cluster is ready"},
 		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNotProgressing, Message: "No changes are in progress"},

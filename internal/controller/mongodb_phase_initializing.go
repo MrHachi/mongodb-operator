@@ -40,7 +40,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
 	}
-	if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
+	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -53,7 +53,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 	var pod *corev1.Pod
 	switch discovery.State {
 	case discoveryNoPods:
-		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.ensureKeyfileSecret(ctx, mongodb); err != nil {
@@ -62,7 +62,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		}
 		fallthrough
 	case discoveryBootstrapPod:
-		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
 		// Proceed with initializing initial primary
@@ -136,7 +136,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 
 	podName := pod.Name
 	if !podReady(pod) || pod.Status.PodIP == "" {
-		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonWaitingForPod); err != nil {
+		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonWaitingForPod); err != nil {
 			return ctrl.Result{}, err
 		}
 		log.Info("Waiting for primary pod to become ready", "name", podName)
@@ -149,7 +149,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
 			return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonReplicaSetUninitialized, "Existing member reports an uninitialized replica set")
 		}
-		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonInitiatingReplicaSet); err != nil {
+		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonInitiatingReplicaSet); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := managerClient.Initiate(ctx); err != nil {
@@ -165,7 +165,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Replica set reports no PRIMARY member")
 	}
 
-	if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingAdminUser); err != nil {
+	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingAdminUser); err != nil {
 		return ctrl.Result{}, err
 	}
 	username := string(adminSecret.Data[adminUsernameKey])
@@ -182,7 +182,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	}
 
 	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
-	if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+	if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -196,7 +196,7 @@ func (r *MongoDBReconciler) markDegraded(ctx context.Context, mongodb *dbv1beta1
 	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 }
 
-func (r *MongoDBReconciler) setInitializingStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason dbv1beta1.ProgressReason) error {
+func (r *MongoDBReconciler) transitionInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason dbv1beta1.ProgressReason) error {
 	message, ok := dbv1beta1.ProgressReasonMessage(reason)
 	if !ok {
 		return fmt.Errorf("get message for progress reason %q: unknown reason", reason)
