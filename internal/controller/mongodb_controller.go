@@ -783,7 +783,8 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 
 				return oldMongoDB.Generation != newMongoDB.Generation ||
-					oldMongoDB.Status.Phase != newMongoDB.Status.Phase
+					oldMongoDB.Status.Phase != newMongoDB.Status.Phase ||
+					hasDegradedStatusCondition(oldMongoDB.Status.Conditions, newMongoDB.Status.Conditions)
 			},
 		})).
 		Named("mongodb").
