@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -160,6 +161,19 @@ func (c *Client) CreateAdmin(ctx context.Context, username, password string) err
 	}
 	if status != http.StatusOK && status != http.StatusConflict {
 		return responseError("create admin user", status, body)
+	}
+	return nil
+}
+
+// RemoveMember removes the replica-set member associated with podName.
+func (c *Client) RemoveMember(ctx context.Context, podName string) error {
+	path := "/v1/mongo/members/" + url.PathEscape(podName)
+	status, body, err := c.request(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("remove replica-set member %q: %w", podName, err)
+	}
+	if status != http.StatusNoContent {
+		return responseError("remove replica-set member", status, body)
 	}
 	return nil
 }

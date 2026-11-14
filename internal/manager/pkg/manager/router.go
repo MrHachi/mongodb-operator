@@ -18,6 +18,10 @@ func (h *InstanceManager) Serve() *chi.Mux {
 				r.Get("/topology", h.HandleGetTopology)
 				r.Get("/config", h.HandleGetConfig)
 			})
+			r.Group(func(r chi.Router) {
+				r.Use(h.requirePermission("delete", "db.mrhachi.dev", "mongodbs"))
+				r.Delete("/members/{podName}", h.HandleRemoveMember)
+			})
 
 			// Routes that require 'create' permission on 'mongodbs' in 'db.mrhachi.dev'
 			r.Group(func(r chi.Router) {

@@ -12,6 +12,7 @@ import (
 	managerapi "github.com/MrHachi/mongodb-operator/internal/manager/pkg/api"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/auth"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
+	"github.com/go-chi/chi/v5"
 )
 
 type InstanceManager struct {
@@ -20,6 +21,7 @@ type InstanceManager struct {
 
 	authenticator                   *auth.Authenticator
 	rsName, hostname                string
+	serviceName                     string
 	namespace                       string
 	operatorServiceAccountNamespace string
 	operatorServiceAccountName      string
@@ -36,6 +38,7 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 			serviceName,
 			namespace,
 		),
+		serviceName:                     serviceName,
 		namespace:                       namespace,
 		operatorServiceAccountNamespace: operatorServiceAccountNamespace,
 		operatorServiceAccountName:      operatorServiceAccountName,
@@ -210,6 +213,28 @@ func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request
 	if err := json.NewEncoder(w).Encode(config); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (m *InstanceManager) HandleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	podName := chi.URLParam(r, "podName")
+	if podName == "" {
+		http.Error(w, "Pod name is required", http.StatusBadRequest)
+		return
+	}
+
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	if err := client.RemoveMember(r.Context(), m.memberHost(podName)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *InstanceManager) memberHost(podName string) string {
+	return fmt.Sprintf("%s.%s.%s.svc.cluster.local:27017", podName, m.serviceName, m.namespace)
 }
 
 func (m *InstanceManager) HandleTransferLeadership(w http.ResponseWriter, _ *http.Request) {

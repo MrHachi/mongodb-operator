@@ -183,3 +183,54 @@ func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
 	}
 	return config, nil
 }
+
+// RemoveMember removes the configured replica-set member with the given host.
+// It is idempotent when the host is already absent. The caller must connect to
+// the current PRIMARY; this method never forces reconfiguration.
+func (c *Client) RemoveMember(ctx context.Context, host string) error {
+	db := c.client.Database("admin")
+	var response struct {
+		Config bson.M `bson:"config"`
+	}
+	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&response); err != nil {
+		return fmt.Errorf("get replica set configuration before removing member: %w", err)
+	}
+	if response.Config == nil {
+		return fmt.Errorf("replica set configuration is missing")
+	}
+	members, ok := response.Config["members"].(bson.A)
+	if !ok {
+		return fmt.Errorf("replica set configuration members have unexpected type %T", response.Config["members"])
+	}
+	filtered := make(bson.A, 0, len(members))
+	removed := false
+	for _, value := range members {
+		member, ok := value.(bson.M)
+		if !ok {
+			return fmt.Errorf("replica set member has unexpected type %T", value)
+		}
+		memberHost, ok := member["host"].(string)
+		if !ok {
+			return fmt.Errorf("replica set member host has unexpected type %T", member["host"])
+		}
+		if memberHost == host {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, member)
+	}
+	if !removed {
+		return nil
+	}
+
+	version, ok := response.Config["version"].(int32)
+	if !ok {
+		return fmt.Errorf("replica set configuration version has unexpected type %T", response.Config["version"])
+	}
+	response.Config["members"] = filtered
+	response.Config["version"] = version + 1
+	if err := db.RunCommand(ctx, bson.D{{Key: "replSetReconfig", Value: response.Config}}).Err(); err != nil {
+		return fmt.Errorf("reconfigure replica set without member %q: %w", host, err)
+	}
+	return nil
+}

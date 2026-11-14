@@ -122,7 +122,18 @@ Retrieves the current replica set voting and election configuration.
     - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
     - `500 Internal Server Error`: For other server-side errors.
 
-### 5. Authenticate
+### 5. Remove Replica Set Member
+
+Removes the member corresponding to a managed MongoDB Pod from the replica-set configuration. Invoke this endpoint on the current PRIMARY's instance-manager because MongoDB only accepts replica-set reconfiguration on the PRIMARY. The operation does not force reconfiguration. If the member is already absent, the request succeeds without changing the configuration.
+
+- **Endpoint**: `DELETE /v1/mongo/members/{podName}`
+- **Authorization**: Requires `delete` permission on `mongodbs` in `db.mrhachi.dev`.
+- **Response**: `204 No Content` when the member is removed or already absent.
+- **Errors**:
+    - `401 Unauthorized` or `403 Forbidden`: If the caller lacks authorization.
+    - `500 Internal Server Error`: If MongoDB cannot read or update the replica-set configuration.
+
+### 6. Authenticate
 
 Authenticates with the MongoDB instance and updates the connection credentials for subsequent requests.
 
@@ -141,7 +152,7 @@ Authenticates with the MongoDB instance and updates the connection credentials f
     - `400 Bad Request`: If the request body is invalid.
     - `500 Internal Server Error`: For other server-side errors.
 
-### 6. Get Instance-Manager Leadership
+### 7. Get Instance-Manager Leadership
 
 Reports the Pod name currently holding instance-manager leadership.
 
@@ -155,7 +166,7 @@ Reports the Pod name currently holding instance-manager leadership.
     ```
 - **Implementation Status**: Leadership state is not implemented yet. The endpoint logs a warning and returns `-r-0`, a placeholder that cannot match the operator's alphabetically suffixed replica Pod names.
 
-### 7. Request Leadership Transfer
+### 8. Request Leadership Transfer
 
 Requests that the instance-manager move leadership away from the node receiving the request.
 
