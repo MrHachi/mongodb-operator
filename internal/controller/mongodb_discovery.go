@@ -49,8 +49,8 @@ type primaryDiscovery struct {
 
 // discoverPrimary inspects managed Pods and returns one of these states:
 //   - discoveryNoPods: no managed Pods exist.
-//   - discoveryBootstrapPod: the sole managed Pod is the initial -r-a member
-//     and its instance-manager reports that the replica set is not initialized.
+//   - discoveryBootstrapPod: a single managed Pod exists and its instance-manager
+//     reports that replica set is not initiated.
 //   - discoveryPrimaryFound: an instance-manager reports a PRIMARY member, and
 //     its host matches a managed Pod.
 //   - discoveryPodsWithoutPrimary: at least one instance-manager responded, but
@@ -66,15 +66,10 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 
 	managedPods := make([]corev1.Pod, 0, len(podList.Items))
 	for _, pod := range podList.Items {
-		owned := false
 		for _, owner := range pod.OwnerReferences {
 			if owner.UID == mongodb.UID && owner.Kind == "MongoDB" {
-				owned = true
-				break
+				managedPods = append(managedPods, pod)
 			}
-		}
-		if owned {
-			managedPods = append(managedPods, pod)
 		}
 	}
 	if len(managedPods) == 0 {
@@ -82,7 +77,7 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 	}
 
 	var uninitializedPods []corev1.Pod
-	endpointResponded := false
+	initializationChecked := false
 	readyPods := 0
 	for i := range managedPods {
 		pod := &managedPods[i]
@@ -94,12 +89,12 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 		topology, err := manager.GetTopology(ctx)
 		if err != nil {
 			if errors.Is(err, managerclient.ErrNotInitialized) {
-				endpointResponded = true
+				initializationChecked = true
 				uninitializedPods = append(uninitializedPods, *pod)
 			}
 			continue
 		}
-		endpointResponded = true
+		initializationChecked = true
 		for _, member := range topology.Members {
 			if strings.EqualFold(member.State, "PRIMARY") {
 				primaryPod := podForMember(managedPods, member.Host)
@@ -112,7 +107,7 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 	if len(managedPods) == 1 && len(uninitializedPods) == 1 && uninitializedPods[0].Name == fmt.Sprintf("%s-r-a", mongodb.Name) {
 		return primaryDiscovery{State: discoveryBootstrapPod, Primary: &uninitializedPods[0]}, nil
 	}
-	if !endpointResponded {
+	if !initializationChecked {
 		if readyPods == 0 {
 			return primaryDiscovery{State: discoveryPodsNotReady}, nil
 		}
