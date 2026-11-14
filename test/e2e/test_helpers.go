@@ -34,13 +34,22 @@ import (
 )
 
 func createMongoDBTestNamespace(testNamespace string) {
-	By("creating namespace " + testNamespace)
-	cmd := exec.Command("kubectl", "create", "namespace", testNamespace)
+	By("removing any leftover namespace " + testNamespace)
+	cmd := exec.Command("kubectl", "delete", "namespace", testNamespace,
+		"--ignore-not-found=true", "--wait=true", "--timeout=2m")
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
+
+	By("creating namespace " + testNamespace)
+	cmd = exec.Command("kubectl", "create", "namespace", testNamespace)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() {
-		cmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=false")
-		_, _ = utils.Run(cmd)
+		By("deleting namespace " + testNamespace)
+		cmd := exec.Command("kubectl", "delete", "namespace", testNamespace,
+			"--wait=true", "--timeout=2m")
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
 	})
 }
 
