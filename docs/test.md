@@ -41,6 +41,14 @@ The `Initializing` phase is the most critical for cluster bootstrapping. Tests i
 
 _(Planned: Tests for scaling, member addition/removal, and configuration updates)_
 
+Planned scaling tests should cover the normal scale-in drain decision and its safety gates:
+
+- Given multiple healthy secondaries, select the one with the least recently applied optime, preserving the most synchronized members.
+- Defer scale-in when no healthy secondary is eligible, or when removing any candidate would violate voting quorum, survivor replication health, or configuration stability.
+- Verify the selected member is marked draining, instance-manager leadership is not on it, and its durable optime reaches the captured majority-commit checkpoint before removal from the replica-set configuration.
+- Verify the operator waits for the configuration change to be recognized before shutting down the member, while retaining its PVC and recording the checkpoint time as `db.mrhachi.dev/data-time`.
+- Verify the operator does not force reconfigure the replica set or manage oplog rollbacks.
+
 ## Phase: Ready
 
 _(Planned: Tests for stable state maintenance and observation)_

@@ -10,13 +10,13 @@ This document defines the proposed API surface for the `MongoDB` custom resource
 
 ## Spec (`spec`)
 
-| Field                        | Type       | Description                                                                              |
-| :--------------------------- | :--------- | :--------------------------------------------------------------------------------------- |
-| `image`                      | `string`   | MongoDB container image. Planned default: `mongo:latest`.                                |
-| `replicas`                   | `integer`  | Desired number of MongoDB members in the replica set.                                    |
-| `scaling.drainThreshold`     | `duration` | Maximum replication lag allowed for a member to be eligible for culling during scale-in. |
-| `scaling.pvcRetentionPeriod` | `duration` | Duration to retain `jettisoned` PVCs before they are cleaned up in the `Ready` phase.    |
-| `users`                      | `list`     | List of administrative users to be managed by the operator.                              |
+| Field                        | Type       | Description                                                                                                                                                                                                                                                                                                      |
+| :--------------------------- | :--------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`                      | `string`   | MongoDB container image. Planned default: `mongo:latest`.                                                                                                                                                                                                                                                        |
+| `replicas`                   | `integer`  | Desired number of managed MongoDB Pods used by the Progressing phase to decide whether to scale in or out.                                                                                                                                                                                                       |
+| `scaling.drainThreshold`     | `duration` | Maximum replication lag for a voting-eligible secondary to be considered healthy and eligible for scale-in. Among eligible candidates, the operator selects the least recently applied optime (as a delta from the primary), subject to quorum, survivor replication-health, and configuration-stability checks. |
+| `scaling.pvcRetentionPeriod` | `duration` | Duration to retain `jettisoned` PVCs before they are cleaned up in `Ready` phase reconciliation.                                                                                                                                                                                                                 |
+| `users`                      | `list`     | List of users to be managed by the operator.                                                                                                                                                                                                                                                                     |
 
 ### MongoDB Container Image
 

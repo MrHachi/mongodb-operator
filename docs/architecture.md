@@ -66,17 +66,21 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
     - Keyfile Secret and connection ConfigMaps.
     - A ClusterRoleBinding that grants the MongoDB Pod's namespace `default` ServiceAccount `create` on TokenReviews and SubjectAccessReviews. A MongoDB finalizer removes the binding when the resource is deleted.
 2.  **Scaling Logic**:
-    - **Scale-In (Culling)**:
-        1.  Identify candidates for removal by selecting members with the lowest replication lag (must be under the configured `drainThreshold`).
-        2.  Call the `instance-manager` to remove the member from the MongoDB Replica Set configuration.
-        3.  Wait for the RS configuration change to be acknowledged.
-        4.  Delete the Pod.
-        5.  Update the associated PVC: set label `db.mrhachi.dev/status=jettisoned`, annotation `db.mrhachi.dev/jettisoned-at` (timestamp), and `db.mrhachi.dev/replication-time` (last observed lag).
+    - The operator compares the desired replica count with the number of managed MongoDB Pods.
+        - **Important:** This is the initial scaling basis; using replica-set membership or healthy voting members reported by MongoDB may be more appropriate in the future, especially during network partitions or transient failures.
+    - Each reconciliation performs at most one member scale operation, then requeues and observes the cluster again before taking another action. This limits quorum risk and avoids making several decisions from stale observations.
+    - **Scale-In (Draining)**:
+        1.  Select the healthy `SECONDARY` with the least recently applied optime, among members whose replication lag is within the configured `drainThreshold`. This preserves the most synchronized members as failover candidates.
+        2.  Defer scale-in if removing the candidate would violate voting quorum, survivor replication health, or replica-set configuration stability. The operator does not force reconfiguration or manage oplog rollbacks.
+        3.  Mark the selected member as draining and ensure instance-manager leadership is not on that member.
+        4.  Capture a fixed majority-commit checkpoint from the current primary and wait for the selected member's durable optime to reach it.
+        5.  Remove the member from the MongoDB Replica Set configuration and wait for the configuration change to be recognized.
+        6.  Shut down the drained member while retaining its PVC. Set the PVC label `db.mrhachi.dev/status=jettisoned`, annotation `db.mrhachi.dev/jettisoned-at` (UTC timestamp), and annotation `db.mrhachi.dev/data-time` to the captured majority-commit checkpoint time. Timestamps use UTC RFC3339 format.
     - **Scale-Out (Expansion)**:
-        1.  **Revive**: Search for `jettisoned` PVCs, selecting the most recent based on the `replication-time` annotation.
-        2.  **Provision**: Create Pods using the alphabetical suffix pattern (`-r-a` through `-r-z`, then `-r-aa`, etc.).
-        3.  **Join**: Call the `instance-manager` to add the new/revived members to the RS configuration.
-        4.  If desired replica count is still not met, repeat provisioning with new PVCs.
+        1.  **Discover a PVC to reclaim**: Search managed PVCs marked `jettisoned`. When reclaiming PVCs, the PVC with the latest valid `db.mrhachi.dev/data-time` is always prioritized because it contains the most recent majority-committed checkpoint. Tie-breaking is done by choosing the lowest member ordinal in alphabetical order. PVCs with missing or invalid data-time annotations rank behind PVCs with valid timestamps.
+        2.  **Provision**: If a PVC was selected, create a Pod using its member suffix and return the PVC to `in-use`. Otherwise, create a PVC and Pod using the lowest available member suffix, filling gaps in the sequence. Suffixes use bijective base 26: `a` through `z`, then `aa` through `az`, `ba`, and so on.
+        3.  **Join**: Call the appropriate `instance-manager` API to add the new or revived member to the RS configuration.
+        4.  Requeue and observe again before provisioning another member if the desired Pod count is still not met.
 3.  **Internal Resource Reconciliation**:
     - Reconcile MongoDB-internal users defined in the CRD via the `instance-manager`.
     - Finalize topology settings.
