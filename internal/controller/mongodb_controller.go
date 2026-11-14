@@ -338,6 +338,9 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 			Labels: r.labels(mongodb,
 				"db.mrhachi.dev/role", "replica",
 				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
+
+				// Set to "jettisoned" when instance drained and retained for a period
+				"db.mrhachi.dev/status", "in-use",
 			),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
