@@ -26,10 +26,56 @@ type MongoDBPhase string
 
 const (
 	PhaseInitializing MongoDBPhase = "Initializing"
-	PhaseScaling      MongoDBPhase = "Scaling"
+	PhaseProgressing  MongoDBPhase = "Progressing"
 	PhaseReady        MongoDBPhase = "Ready"
 	PhaseDegraded     MongoDBPhase = "Degraded"
 )
+
+const (
+	ConditionReady       = "Ready"
+	ConditionProgressing = "Progressing"
+	ConditionDegraded    = "Degraded"
+
+	ReasonInitializing   = "Initializing"
+	ReasonProgressing    = "Progressing"
+	ReasonDegraded       = "Degraded"
+	ReasonReady          = "Ready"
+	ReasonNotProgressing = "NotProgressing"
+	ReasonNoKnownIssues  = "NoKnownIssues"
+
+	ReasonInstanceManagerUnavailable = "InstanceManagerUnavailable"
+	ReasonPrimaryUnavailable         = "PrimaryUnavailable"
+	ReasonCredentialsMissing         = "CredentialsMissing"
+	ReasonCredentialsIncomplete      = "CredentialsIncomplete"
+	ReasonReplicaSetUninitialized    = "ReplicaSetUninitialized"
+)
+
+// ProgressReason identifies the current operation reported by the Progressing condition.
+type ProgressReason string
+
+const (
+	ProgressReasonDiscoveringCluster   ProgressReason = "DiscoveringCluster"
+	ProgressReasonCreatingResources    ProgressReason = "CreatingResources"
+	ProgressReasonWaitingForPod        ProgressReason = "WaitingForPrimaryPod"
+	ProgressReasonInitiatingReplicaSet ProgressReason = "InitiatingReplicaSet"
+	ProgressReasonCreatingAdminUser    ProgressReason = "CreatingAdminUser"
+	ProgressReasonReconcilingMembers   ProgressReason = "ReconcilingMembers"
+)
+
+var progressReasonMessages = map[ProgressReason]string{
+	ProgressReasonDiscoveringCluster:   "Checking for existing MongoDB members",
+	ProgressReasonCreatingResources:    "Creating resources for the initial MongoDB member",
+	ProgressReasonWaitingForPod:        "Waiting for the primary Pod to become ready",
+	ProgressReasonInitiatingReplicaSet: "Initiating the MongoDB replica set",
+	ProgressReasonCreatingAdminUser:    "Ensuring the MongoDB admin user exists",
+	ProgressReasonReconcilingMembers:   "Reconciling MongoDB replica set members",
+}
+
+// ProgressReasonMessage returns the catalog message for a progress reason.
+func ProgressReasonMessage(reason ProgressReason) (string, bool) {
+	message, ok := progressReasonMessages[reason]
+	return message, ok
+}
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
@@ -49,17 +95,13 @@ type MongoDBSpec struct {
 // MongoDBStatus defines the observed state of MongoDB.
 type MongoDBStatus struct {
 	// Phase represents the current phase of the MongoDB cluster lifecycle
-	// Valid values are: Initializing, Scaling, Ready, Degraded
+	// Valid values are: Initializing, Progressing, Ready, Degraded
 	Phase MongoDBPhase `json:"phase,omitempty"`
 
-	// conditions represent the current state of the MongoDB resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
+	// Conditions represent the observed state of the MongoDB resource. The operator
+	// maintains Ready, Progressing, and Degraded conditions. While work is underway,
+	// Progressing is True and its Reason identifies the current operation.
+	// Degraded is reserved for observed cluster problems that block the desired state.
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
 	// +listMapKey=type

@@ -27,7 +27,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -86,9 +88,8 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	switch mongodb.Status.Phase {
 	case "":
 		log.Info("New MongoDB cluster", "name", mongodb.Name)
-		mongodb.Status.Phase = dbv1beta1.PhaseInitializing
-		if err := r.Status().Update(ctx, mongodb); err != nil {
-			return ctrl.Result{}, fmt.Errorf("set initializing status: %w", err)
+		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
 
@@ -96,13 +97,19 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		log.Info("Initializing MongoDB cluster", "name", mongodb.Name)
 		return r.reconcileInitializing(ctx, mongodb)
 
-	case dbv1beta1.PhaseScaling:
-		log.Info("Scaling MongoDB cluster", "name", mongodb.Name)
+	case dbv1beta1.PhaseProgressing:
+		log.Info("Reconciling MongoDB cluster", "name", mongodb.Name)
 		// To be implemented
+		if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 
 	case dbv1beta1.PhaseReady:
 		log.Info("Configuring ready MongoDB cluster", "name", mongodb.Name)
+		if err := r.setReadyStatus(ctx, mongodb); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 
 	case dbv1beta1.PhaseDegraded:
@@ -110,7 +117,10 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 
 	default:
-		log.Info("Unknown phase", "phase", mongodb.Status.Phase)
+		log.Info("Migrating unknown phase to Progressing", "phase", mongodb.Status.Phase)
+		if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 }
@@ -119,6 +129,9 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling initialization phase", "name", mongodb.Name)
+	if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Discover existing members before creating the default -r-a member. This
 	// prevents a reset phase from creating a new member beside existing data.
@@ -129,12 +142,18 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 	var pod *corev1.Pod
 	switch discovery.State {
 	case discoveryNoPods:
+		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+			return ctrl.Result{}, err
+		}
 		if err := r.ensureKeyfileSecret(ctx, mongodb); err != nil {
 			log.Error(err, "Failed to ensure keyfile secret", "name", mongodb.Name)
 			return ctrl.Result{}, fmt.Errorf("ensure keyfile secret: %w", err)
 		}
 		fallthrough
 	case discoveryBootstrapPod:
+		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
+			return ctrl.Result{}, err
+		}
 		// Proceed with initializing initial primary
 		if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial PVC: %w", err)
@@ -157,12 +176,12 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
-		return r.markDegraded(ctx, mongodb, "managed Pod instance-manager endpoints are unavailable")
+		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable")
 	default:
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
-		return r.markDegraded(ctx, mongodb, "managed Pods exist but no primary is available")
+		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available")
 	}
 
 	// Proceed with MongoDB cluster reconciliation, creating a new admin secret if we determined that this isn't a pre-existing cluster (no primary discovered)
@@ -185,13 +204,13 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
 		if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, adminSecret); err != nil {
 			if apierrors.IsNotFound(err) {
-				return r.markDegraded(ctx, mongodb, "admin credentials secret is missing")
+				return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonCredentialsMissing, "Admin credentials Secret is missing")
 			}
 			return ctrl.Result{}, fmt.Errorf("get admin credentials secret: %w", err)
 		}
 
 		if len(adminSecret.Data[adminUsernameKey]) == 0 || len(adminSecret.Data[adminPasswordKey]) == 0 {
-			return r.markDegraded(ctx, mongodb, "admin credentials secret is incomplete")
+			return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonCredentialsIncomplete, "Admin credentials Secret is missing username or password")
 		}
 	} else {
 		secret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
@@ -203,6 +222,9 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 
 	podName := pod.Name
 	if !podReady(pod) || pod.Status.PodIP == "" {
+		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonWaitingForPod); err != nil {
+			return ctrl.Result{}, err
+		}
 		log.Info("Waiting for primary pod to become ready", "name", podName)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
@@ -211,7 +233,10 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	topology, err := managerClient.GetTopology(ctx)
 	if errors.Is(err, managerclient.ErrNotInitialized) {
 		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
-			return r.markDegraded(ctx, mongodb, "existing member reports an uninitialized replica set")
+			return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonReplicaSetUninitialized, "Existing member reports an uninitialized replica set")
+		}
+		if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonInitiatingReplicaSet); err != nil {
+			return ctrl.Result{}, err
 		}
 		if err := managerClient.Initiate(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("initiate replica set: %w", err)
@@ -223,9 +248,12 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
 	}
 	if !topologyHasPrimary(topology) {
-		return r.markDegraded(ctx, mongodb, "replica set reports no PRIMARY member")
+		return r.markDegraded(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Replica set reports no PRIMARY member")
 	}
 
+	if err := r.setInitializingStatus(ctx, mongodb, dbv1beta1.ProgressReasonCreatingAdminUser); err != nil {
+		return ctrl.Result{}, err
+	}
 	username := string(adminSecret.Data[adminUsernameKey])
 	password := string(adminSecret.Data[adminPasswordKey])
 	if err := managerClient.Authenticate(ctx, username, password); errors.Is(err, managerclient.ErrUnauthenticated) {
@@ -240,22 +268,79 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	}
 
 	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
-	mongodb.Status.Phase = dbv1beta1.PhaseScaling
-	if err := r.Status().Update(ctx, mongodb); err != nil {
-		return ctrl.Result{}, fmt.Errorf("set scaling status: %w", err)
+	if err := r.setProgressingStatus(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
 
-func (r *MongoDBReconciler) markDegraded(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason string) (ctrl.Result, error) {
-	if mongodb.Status.Phase != dbv1beta1.PhaseDegraded {
-		mongodb.Status.Phase = dbv1beta1.PhaseDegraded
-		if err := r.Status().Update(ctx, mongodb); err != nil {
-			return ctrl.Result{}, fmt.Errorf("set degraded status: %w", err)
-		}
+func (r *MongoDBReconciler) markDegraded(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) (ctrl.Result, error) {
+	if err := r.setDegradedStatus(ctx, mongodb, reason, message); err != nil {
+		return ctrl.Result{}, err
 	}
-	logf.FromContext(ctx).Info("MongoDB cluster is degraded; retrying recovery", "name", mongodb.Name, "reason", reason)
+	logf.FromContext(ctx).Info("MongoDB cluster is degraded; attempting recovery", "name", mongodb.Name, "reason", reason, "message", message)
 	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+}
+
+func (r *MongoDBReconciler) setInitializingStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason dbv1beta1.ProgressReason) error {
+	message, ok := dbv1beta1.ProgressReasonMessage(reason)
+	if !ok {
+		return fmt.Errorf("get message for progress reason %q: unknown reason", reason)
+	}
+	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseInitializing, []metav1.Condition{
+		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonInitializing, Message: "MongoDB cluster is not ready"},
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: string(reason), Message: message},
+		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
+	})
+}
+
+func (r *MongoDBReconciler) setProgressingStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, phase dbv1beta1.MongoDBPhase, reason dbv1beta1.ProgressReason) error {
+	message, ok := dbv1beta1.ProgressReasonMessage(reason)
+	if !ok {
+		return fmt.Errorf("get message for progress reason %q: unknown reason", reason)
+	}
+	return r.updateStatus(ctx, mongodb, phase, []metav1.Condition{
+		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonProgressing, Message: "MongoDB cluster is not ready"},
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: string(reason), Message: message},
+		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
+	})
+}
+
+func (r *MongoDBReconciler) setDegradedStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string) error {
+	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseDegraded, []metav1.Condition{
+		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonDegraded, Message: message},
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNotProgressing, Message: "Reconciliation is blocked by a cluster problem"},
+		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: message},
+	})
+}
+
+func (r *MongoDBReconciler) setReadyStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	return r.updateStatus(ctx, mongodb, dbv1beta1.PhaseReady, []metav1.Condition{
+		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionTrue, Reason: dbv1beta1.ReasonReady, Message: "MongoDB cluster is ready"},
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNotProgressing, Message: "No changes are in progress"},
+		{Type: dbv1beta1.ConditionDegraded, Status: metav1.ConditionFalse, Reason: dbv1beta1.ReasonNoKnownIssues, Message: "No cluster problems detected"},
+	})
+}
+
+func (r *MongoDBReconciler) updateStatus(
+	ctx context.Context,
+	mongodb *dbv1beta1.MongoDB,
+	phase dbv1beta1.MongoDBPhase,
+	conditions []metav1.Condition,
+) error {
+	before := mongodb.DeepCopy()
+	mongodb.Status.Phase = phase
+	for _, condition := range conditions {
+		condition.ObservedGeneration = mongodb.Generation
+		apiMeta.SetStatusCondition(&mongodb.Status.Conditions, condition)
+	}
+	if equality.Semantic.DeepEqual(before.Status, mongodb.Status) {
+		return nil
+	}
+	if err := r.Status().Update(ctx, mongodb); err != nil {
+		return fmt.Errorf("update MongoDB status: %w", err)
+	}
+	return nil
 }
 
 func (r *MongoDBReconciler) managerClientForPod(pod *corev1.Pod) *managerclient.Client {
