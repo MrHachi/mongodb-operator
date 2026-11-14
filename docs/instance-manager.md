@@ -139,7 +139,7 @@ Authenticates with the MongoDB instance and updates the connection credentials f
 
 ### 6. Get Instance-Manager Leadership
 
-Reports the node currently holding instance-manager leadership.
+Reports the Pod name currently holding instance-manager leadership.
 
 - **Endpoint**: `GET /v1/manager/leadership`
 - **Authentication**: Requires a token for the exact operator ServiceAccount configured on the instance-manager Pod.

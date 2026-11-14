@@ -275,16 +275,33 @@ func (r *MongoDBReconciler) markPodDraining(ctx context.Context, pod *corev1.Pod
 }
 
 func (r *MongoDBReconciler) resumeScaleIn(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod) (ctrl.Result, error) {
-	if err := r.ensureInstanceManagerLeadershipAwayFrom(ctx, mongodb, pod); err != nil {
-		return r.waitForReconciliation(ctx, mongodb, "LeadershipTransferPending", fmt.Sprintf("Scale-in is waiting for leadership to move away from Pod %s: %v", pod.Name, err), 15*time.Second)
+	ok, err := r.ensureInstanceManagerLeadershipAwayFrom(ctx, pod)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure leadership is away from Pod %s: %w", pod.Name, err)
+	}
+	if !ok {
+		return r.waitForReconciliation(ctx, mongodb, "LeadershipTransferPending", fmt.Sprintf("Scale-in is waiting for leadership to move away from Pod %s", pod.Name), 15*time.Second)
 	}
 	return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Scale-in of Pod %s is awaiting the checkpoint and topology drain steps", pod.Name), 15*time.Second)
 }
 
-// ensureInstanceManagerLeadershipAwayFrom is the future instance-manager API
-// integration point. Leadership movement is not implemented yet.
-func (r *MongoDBReconciler) ensureInstanceManagerLeadershipAwayFrom(_ context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod) error {
-	return fmt.Errorf("leadership API is not implemented for MongoDB %s/%s and Pod %s", mongodb.Namespace, mongodb.Name, pod.Name)
+// ensureInstanceManagerLeadershipAwayFrom requests a transfer from the draining
+// Pod's instance-manager and reports whether the leadership check allows
+// scale-in to proceed.
+func (r *MongoDBReconciler) ensureInstanceManagerLeadershipAwayFrom(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	manager := r.managerClientForPod(pod)
+	if err := manager.TransferLeadership(ctx); err != nil {
+		return false, fmt.Errorf("request leadership transfer: %w", err)
+	}
+
+	leadership, err := manager.GetLeadership(ctx)
+	if err != nil {
+		return false, fmt.Errorf("get leadership status: %w", err)
+	}
+	if leadership == nil || leadership.Leader == "" {
+		return false, fmt.Errorf("instance-manager returned an empty leader identity")
+	}
+	return leadership.Leader != pod.Name, nil
 }
 
 func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, _ []corev1.Pod) (ctrl.Result, error) {
