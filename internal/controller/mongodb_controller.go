@@ -17,13 +17,11 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -34,11 +32,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	kubeclient "k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
+	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
+	managerconfig "github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
 )
 
 const (
@@ -50,7 +51,10 @@ const (
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                  *runtime.Scheme
+	KubeClient              kubeclient.Interface
+	ServiceAccountNamespace string
+	ServiceAccountName      string
 }
 
 // +kubebuilder:rbac:groups=db.mrhachi.dev,resources=mongodbs,verbs=get;list;watch;create;update;patch;delete
@@ -60,6 +64,7 @@ type MongoDBReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,resourceNames=controller-manager,verbs=create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -153,66 +158,31 @@ func (r *MongoDBReconciler) ReconcileInitializing(ctx context.Context, mongodb *
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("read operator service account token: %w", err)
-	}
-
 	managerURL := fmt.Sprintf("http://%s:8080", pod.Status.PodIP)
-	topologyStatus, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodGet, "/v1/topology", nil)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
-	}
-	if topologyStatus == http.StatusPreconditionFailed {
-		status, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/initiate", nil)
-		if err != nil {
+	managerClient := managerclient.New(managerURL, r.KubeClient, r.ServiceAccountNamespace, r.ServiceAccountName, managerconfig.InstanceManagerAudience)
+	err = managerClient.GetTopology(ctx)
+	if errors.Is(err, managerclient.ErrNotInitialized) {
+		if err := managerClient.Initiate(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("initiate replica set: %w", err)
-		}
-		if status != http.StatusOK && status != http.StatusConflict {
-			return ctrl.Result{}, fmt.Errorf("initiate replica set returned unexpected status %d", status)
 		}
 		log.Info("Initiated MongoDB replica set", "name", mongodb.Name)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
-	if topologyStatus != http.StatusOK {
-		return ctrl.Result{}, fmt.Errorf("get replica set topology returned unexpected status %d", topologyStatus)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
 	}
 
-	credentials := map[string]string{
-		adminUsernameKey: string(adminSecret.Data[adminUsernameKey]),
-		adminPasswordKey: string(adminSecret.Data[adminPasswordKey]),
-	}
-	credentialsBody, err := json.Marshal(credentials)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("encode admin credentials: %w", err)
-	}
-	authBody, err := json.Marshal(map[string]string{
-		adminUsernameKey: credentials[adminUsernameKey],
-		adminPasswordKey: credentials[adminPasswordKey],
-		"auth_source":    "admin",
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("encode authentication request: %w", err)
-	}
-	authStatus, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/authenticate", authBody)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("authenticate admin user: %w", err)
-	}
-	if authStatus == http.StatusUnauthorized {
-		status, err := requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/admin", credentialsBody)
-		if err != nil {
+	username := string(adminSecret.Data[adminUsernameKey])
+	password := string(adminSecret.Data[adminPasswordKey])
+	if err := managerClient.Authenticate(ctx, username, password); errors.Is(err, managerclient.ErrUnauthenticated) {
+		if err := managerClient.CreateAdmin(ctx, username, password); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create admin user: %w", err)
 		}
-		if status != http.StatusOK && status != http.StatusConflict {
-			return ctrl.Result{}, fmt.Errorf("create admin user returned unexpected status %d", status)
-		}
-		authStatus, err = requestInstanceManager(ctx, managerURL, string(token), mongodb.Namespace, http.MethodPost, "/v1/authenticate", authBody)
-		if err != nil {
+		if err := managerClient.Authenticate(ctx, username, password); err != nil {
 			return ctrl.Result{}, fmt.Errorf("authenticate newly created admin user: %w", err)
 		}
-	}
-	if authStatus != http.StatusOK {
-		return ctrl.Result{}, fmt.Errorf("authenticate admin user returned unexpected status %d", authStatus)
+	} else if err != nil {
+		return ctrl.Result{}, fmt.Errorf("authenticate admin user: %w", err)
 	}
 
 	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
@@ -230,25 +200,6 @@ func podReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-func requestInstanceManager(ctx context.Context, baseURL, token, namespace, method, path string, body []byte) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Kubernetes-Namespace", namespace)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode, nil
 }
 
 func (r *MongoDBReconciler) ensureAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
@@ -435,6 +386,8 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			),
 		},
 		Spec: corev1.PodSpec{
+			Hostname:      podName,
+			Subdomain:     mongodb.Name,
 			RestartPolicy: corev1.RestartPolicyAlways,
 			Containers: []corev1.Container{
 				{
@@ -451,6 +404,12 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 				{
 					Name:  "instance-manager",
 					Image: "ghcr.io/mrhachi/mongodb-instance-manager:v0.1",
+					Env: []corev1.EnvVar{
+						{Name: "MONGODB_RS_NAME", Value: mongodb.Name},
+						{Name: "MONGODB_HOSTNAME", Value: podName},
+						{Name: "MONGODB_SERVICE_NAME", Value: mongodb.Name},
+						{Name: "MONGODB_NAMESPACE", Value: mongodb.Namespace},
+					},
 					Ports: []corev1.ContainerPort{
 						{
 							Name:          "http",
@@ -557,6 +516,23 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.KubeClient == nil {
+		kube, err := kubeclient.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			return fmt.Errorf("create Kubernetes client: %w", err)
+		}
+		r.KubeClient = kube
+	}
+	if r.ServiceAccountNamespace == "" {
+		r.ServiceAccountNamespace = os.Getenv("POD_NAMESPACE")
+	}
+	if r.ServiceAccountName == "" {
+		r.ServiceAccountName = os.Getenv("SERVICE_ACCOUNT_NAME")
+	}
+	if r.ServiceAccountNamespace == "" || r.ServiceAccountName == "" {
+		return fmt.Errorf("POD_NAMESPACE and SERVICE_ACCOUNT_NAME must be configured")
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dbv1beta1.MongoDB{}).
 		Named("mongodb").
