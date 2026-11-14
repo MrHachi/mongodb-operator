@@ -64,9 +64,11 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	setupManager()
 })
 
 var _ = AfterSuite(func() {
+	teardownManager()
 	teardownCertManager()
 })
 

@@ -47,7 +47,34 @@ This phase focuses on setting up the first primary node and the foundational clu
 
 ### 2. Progressing Phase (`status.phase = Progressing`)
 
-Represents ongoing reconciliation after bootstrap. The `Progressing` condition reason identifies the current operation, and its message provides a human-readable summary. Future member changes will use the same condition with operation-specific reasons.
+Represents ongoing reconciliation after bootstrap. The operator ensures the cluster reaches the desired replica count and configuration.
+
+**Reconciliation Workflow:**
+
+1.  **Infrastructure Reconciliation**: Ensures all foundational Kubernetes resources exist and are correct:
+    - Headless Service for intra-cluster discovery.
+    - Keyfile Secret and connection ConfigMaps.
+    - Necessary RBAC resources.
+2.  **Scaling Logic**:
+    - **Scale-In (Culling)**:
+        1.  Identify candidates for removal by selecting members with the lowest replication lag (must be under the configured `drainThreshold`).
+        2.  Call the `instance-manager` to remove the member from the MongoDB Replica Set configuration.
+        3.  Wait for the RS configuration change to be acknowledged.
+        4.  Delete the Pod.
+        5.  Update the associated PVC: set label `db.mrhachi.dev/status=jettisoned`, annotation `db.mrhachi.dev/jettisoned-at` (timestamp), and `db.mrhachi.dev/replication-time` (last observed lag).
+    - **Scale-Out (Expansion)**:
+        1.  **Revive**: Search for `jettisoned` PVCs, selecting the most recent based on the `replication-time` annotation.
+        2.  **Provision**: Create Pods using the alphabetical suffix pattern (`-r-a` through `-r-z`, then `-r-aa`, etc.).
+        3.  **Join**: Call the `instance-manager` to add the new/revived members to the RS configuration.
+        4.  If desired replica count is still not met, repeat provisioning with new PVCs.
+3.  **Internal Resource Reconciliation**:
+    - Reconcile MongoDB-internal users defined in the CRD via the `instance-manager`.
+    - Finalize topology settings.
+4.  **Quorum Stability Check**:
+    - The cluster is considered "Stable" when at least $n/2+1$ members are in a voting state (`PRIMARY` or `SECONDARY`).
+    - The operator waits for this quorum to persist for a configured number of consecutive minutes.
+
+**Transition**: Once the quorum is stable, `status.phase` transitions to `Ready`. Any failure to reach quorum or unexpected member crashes will transition the cluster to `Degraded`.
 
 ## Security & RBAC
 
