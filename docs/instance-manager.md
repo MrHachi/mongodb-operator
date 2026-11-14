@@ -16,6 +16,7 @@ The sidecar verifies the operator's identity using the Kubernetes API. It perfor
 Specifically, the operator's ServiceAccount must have:
 
 - `create` permission for the `mongodbs` resource in the `db.mrhachi.dev` API group.
+- `get` permission for the `mongodbs` resource in the `db.mongodb.dev` API group.
 
 ## API Endpoints
 
@@ -38,21 +39,43 @@ Creates the administrative user for the MongoDB instance.
 - **Request Body**:
     ```json
     {
-      "username": "string",
-      "password": "string"
+        "username": "string",
+        "password": "string"
     }
     ```
 - **Implementation Detail**: The sidecar should use the MongoDB Go driver to execute the command.
+
+    ### 3. Get Cluster Topology
+
+    Retrieves the current MongoDB replica set topology.
+
+    - **Endpoint**: `GET /v1/topology`
+    - **Description**: Returns a JSON list of all members in the replica set.
+    - **Response Body**:
+        ```json
+        {
+          "members": [
+            {
+              "id": 0,
+              "host": "mongodb-0.example.com:27017"
+            },
+            ...
+          ]
+        }
+        ```
+    - **Errors**:
+        - `412 Precondition Failed`: Returned if the cluster is not yet initialized.
+        - `500 Internal Server Error`: For other server-side errors.
 
 ## Configuration
 
 The following environment variables must be provided to the instance-manager container. These are injected by the MongoDB Operator.
 
-| Environment Variable | Description | Default |
-|----------------------|-------------|---------|
-| `MONGODB_RS_NAME` | The name of the MongoDB Replica Set. | (Required) |
-| `MONGODB_HOSTNAME` | The hostname of the MongoDB instance. | (Required) |
-| `MONGODB_SERVICE_NAME` | The Kubernetes service name for the MongoDB instance. | (Required) |
-| `MONGODB_NAMESPACE` | The Kubernetes namespace where the MongoDB instance is running. | (Required) |
-| `MONGODB_URI` | The MongoDB connection URI. | `mongodb://localhost:27017` |
-| `PORT` | The port on which the server listens. | `8080` |
+| Environment Variable   | Description                                                     | Default                     |
+| ---------------------- | --------------------------------------------------------------- | --------------------------- |
+| `MONGODB_RS_NAME`      | The name of the MongoDB Replica Set.                            | (Required)                  |
+| `MONGODB_HOSTNAME`     | The hostname of the MongoDB instance.                           | (Required)                  |
+| `MONGODB_SERVICE_NAME` | The Kubernetes service name for the MongoDB instance.           | (Required)                  |
+| `MONGODB_NAMESPACE`    | The Kubernetes namespace where the MongoDB instance is running. | (Required)                  |
+| `MONGODB_URI`          | The MongoDB connection URI.                                     | `mongodb://localhost:27017` |
+| `PORT`                 | The port on which the server listens.                           | `8080`                      |

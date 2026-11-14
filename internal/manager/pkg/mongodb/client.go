@@ -9,6 +9,15 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type Topology struct {
+	Members []Member `bson:"members" json:"members"`
+}
+
+type Member struct {
+	ID   int    `bson:"_id" json:"id"`
+	Host string `bson:"host" json:"host"`
+}
+
 type Client struct {
 	client *mongo.Client
 }
@@ -58,10 +67,25 @@ func (c *Client) CreateAdminUser(ctx context.Context, username, password string)
 	if err := db.RunCommand(ctx, command).Err(); err != nil {
 		// Check if error is because user already exists
 		// In MongoDB, error code for duplicate key is 11000, but for createUser it might be different.
-		// According to Mongo error codes, duplicate key error is 11000.
 		// Let's check if it's a "user already exists" error.
 		// For now, I'll just return the error but the handler will handle it.
 		return err
 	}
 	return nil
+}
+
+// GetTopology retrieves the cluster topology from MongoDB.
+func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
+	db := c.client.Database("admin")
+
+	command := bson.D{
+		{Key: "replSetGetStatus", Value: 1},
+	}
+
+	var topology Topology
+	if err := db.RunCommand(ctx, command).Decode(&topology); err != nil {
+		return nil, fmt.Errorf("cluster not initialized: %w", err)
+	}
+
+	return &topology, nil
 }
