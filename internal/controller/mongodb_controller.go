@@ -374,35 +374,6 @@ func (r *MongoDBReconciler) labels(mongodb *dbv1beta1.MongoDB, custom ...string)
 	return labels
 }
 
-// ensureResource creates desired when it is absent, or reconciles the
-// operator-owned fields of the existing object and patches only when needed.
-// reconcile must preserve fields not owned by this controller.
-func ensureResource[T client.Object](ctx context.Context, c client.Client, desired T, reconcile func(existing, desired T) error) error {
-	key := client.ObjectKeyFromObject(desired)
-	existing := desired.DeepCopyObject().(T)
-	if err := c.Get(ctx, key, existing); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get %T %s: %w", desired, key, err)
-		}
-		if err := c.Create(ctx, desired); err != nil {
-			return fmt.Errorf("create %T %s: %w", desired, key, err)
-		}
-		return nil
-	}
-
-	before := existing.DeepCopyObject().(T)
-	if err := reconcile(existing, desired); err != nil {
-		return fmt.Errorf("reconcile %T: %w", existing, err)
-	}
-	if equality.Semantic.DeepEqual(before, existing) {
-		return nil
-	}
-	if err := c.Patch(ctx, existing, client.MergeFrom(before)); err != nil {
-		return fmt.Errorf("patch %T %s: %w", existing, key, err)
-	}
-	return nil
-}
-
 func mergeDesiredLabels(existing, desired map[string]string) map[string]string {
 	if existing == nil {
 		existing = make(map[string]string)
@@ -412,7 +383,7 @@ func mergeDesiredLabels(existing, desired map[string]string) map[string]string {
 }
 
 func (r *MongoDBReconciler) reconcileOwnedMetadata(existing, desired client.Object, mongodb *dbv1beta1.MongoDB) error {
-	// This is currently reflected in memory only; we apply this via the Kubernetes API later when the reconciler calls client.Patch() as a part of ensureResource()
+	// This is currently reflected in memory only; we apply this via the Kubernetes API later when the reconciler calls client.Patch() as a part of ensure()
 	existing.SetLabels(mergeDesiredLabels(existing.GetLabels(), desired.GetLabels()))
 
 	if err := ctrl.SetControllerReference(mongodb, existing, r.Scheme); err != nil {
@@ -443,21 +414,24 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on keyfile secret: %w", err)
 	}
-	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
-		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
-			return err
-		}
-		if !validKeyfile(existing.Data["mongodb-keyfile"]) {
-			if existing.Data == nil {
-				existing.Data = make(map[string][]byte)
+
+	return ensure(ctx, r.Client, secret,
+		assessOwnedFields(func(existing, desired *corev1.Secret) ([]metav1.Condition, error) {
+			if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+				return nil, fmt.Errorf("reconcile Secret metadata: %w", err)
 			}
-			existing.Data["mongodb-keyfile"] = key
-		}
-		if existing.Type == "" {
-			existing.Type = desired.Type
-		}
-		return nil
-	})
+			if !validKeyfile(existing.Data["mongodb-keyfile"]) {
+				if existing.Data == nil {
+					existing.Data = make(map[string][]byte)
+				}
+				existing.Data["mongodb-keyfile"] = key
+			}
+			if existing.Type == "" {
+				existing.Type = desired.Type
+			}
+			return nil, nil
+		}),
+	)
 }
 
 func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
@@ -510,9 +484,12 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 		return fmt.Errorf("set owner reference on pvc: %w", err)
 	}
 
-	return ensureResource(ctx, r.Client, pvc, func(existing, desired *corev1.PersistentVolumeClaim) error {
-		return r.reconcileOwnedMetadata(existing, desired, mongodb)
-	})
+	return ensure(ctx, r.Client, pvc, assessOwnedFields(func(existing, desired *corev1.PersistentVolumeClaim) ([]metav1.Condition, error) {
+		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+			return nil, fmt.Errorf("reconcile PersistentVolumeClaim metadata: %w", err)
+		}
+		return nil, nil
+	}))
 }
 
 func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
@@ -673,9 +650,12 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get replica pod: %w", err)
 	}
-	return ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
-		return r.reconcileOwnedMetadata(existing, desired, mongodb)
-	})
+	return ensure(ctx, r.Client, pod, assessOwnedFields(func(existing, desired *corev1.Pod) ([]metav1.Condition, error) {
+		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
+			return nil, fmt.Errorf("reconcile Pod metadata: %w", err)
+		}
+		return nil, nil
+	}))
 }
 
 func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
@@ -707,17 +687,30 @@ func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *
 	if err := ctrl.SetControllerReference(mongodb, service, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on headless service: %w", err)
 	}
-	return ensureResource(ctx, r.Client, service, func(existing, desired *corev1.Service) error {
+	return ensure(ctx, r.Client, service, assessOwnedFields(func(existing, desired *corev1.Service) ([]metav1.Condition, error) {
+		condition := metav1.Condition{Type: "ServiceDegraded", Status: metav1.ConditionFalse, Reason: "NoKnownIssues", Message: "Owned Service fields match the desired state"}
 		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
-			return fmt.Errorf("service %s/%s is not headless (clusterIP %q); refusing unsafe in-place conversion", existing.Namespace, existing.Name, existing.Spec.ClusterIP)
+			condition.Status = metav1.ConditionTrue
+			condition.Reason = "ServiceNotHeadless"
+			condition.Message = fmt.Sprintf("Service %s/%s is not headless (clusterIP %q); refusing unsafe in-place conversion", existing.Namespace, existing.Name, existing.Spec.ClusterIP)
+			return []metav1.Condition{condition}, fmt.Errorf("reconcile headless Service: %s", condition.Message)
 		}
+		before := existing.DeepCopy()
 		if err := r.reconcileOwnedMetadata(existing, desired, mongodb); err != nil {
-			return err
+			condition.Status = metav1.ConditionTrue
+			condition.Reason = "ServiceOwnershipConflict"
+			condition.Message = fmt.Sprintf("Service %s/%s ownership could not be reconciled", existing.Namespace, existing.Name)
+			return []metav1.Condition{condition}, fmt.Errorf("reconcile Service metadata: %w", err)
 		}
 		existing.Spec.Selector = mergeDesiredLabels(existing.Spec.Selector, desired.Spec.Selector)
 		existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
-		return nil
-	})
+		if !equality.Semantic.DeepEqual(before, existing) {
+			condition.Status = metav1.ConditionTrue
+			condition.Reason = "ServiceDrift"
+			condition.Message = "Owned Service fields require reconciliation"
+		}
+		return []metav1.Condition{condition}, nil
+	}))
 }
 
 // SetupWithManager sets up the controller with the Manager.
