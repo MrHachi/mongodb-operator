@@ -594,6 +594,8 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 						{Name: "MONGODB_HOSTNAME", Value: podName},
 						{Name: "MONGODB_SERVICE_NAME", Value: mongodb.Name},
 						{Name: "MONGODB_NAMESPACE", Value: mongodb.Namespace},
+						{Name: "OPERATOR_SERVICE_ACCOUNT_NAMESPACE", Value: r.Config.ServiceAccountNamespace},
+						{Name: "OPERATOR_SERVICE_ACCOUNT_NAME", Value: r.Config.ServiceAccountName},
 					},
 					Ports: []corev1.ContainerPort{
 						{

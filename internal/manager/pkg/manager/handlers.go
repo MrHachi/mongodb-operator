@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 
+	managerapi "github.com/MrHachi/mongodb-operator/internal/manager/pkg/api"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/auth"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
 )
@@ -16,12 +18,14 @@ type InstanceManager struct {
 	mu     sync.Mutex
 	client *mongodb.Client
 
-	authenticator    *auth.Authenticator
-	rsName, hostname string
-	namespace        string
+	authenticator                   *auth.Authenticator
+	rsName, hostname                string
+	namespace                       string
+	operatorServiceAccountNamespace string
+	operatorServiceAccountName      string
 }
 
-func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, rsName, hostname, serviceName, namespace string) *InstanceManager {
+func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, rsName, hostname, serviceName, namespace, operatorServiceAccountNamespace, operatorServiceAccountName string) *InstanceManager {
 	return &InstanceManager{
 		client:        client,
 		authenticator: authenticator,
@@ -32,11 +36,30 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 			serviceName,
 			namespace,
 		),
-		namespace: namespace,
+		namespace:                       namespace,
+		operatorServiceAccountNamespace: operatorServiceAccountNamespace,
+		operatorServiceAccountName:      operatorServiceAccountName,
 	}
 }
 
-func (m *InstanceManager) RequirePermission(verb, group, resource string) func(http.Handler) http.Handler {
+func (m *InstanceManager) requirePermission(verb, group, resource string) func(http.Handler) http.Handler {
+	return m.requireToken(func(ctx context.Context, token string) error {
+		return m.authenticator.VerifyOperatorToken(ctx, token, m.namespace, verb)
+	})
+}
+
+func (m *InstanceManager) requireOperator() func(http.Handler) http.Handler {
+	return m.requireToken(func(ctx context.Context, token string) error {
+		return m.authenticator.VerifyOperatorTokenIdentity(
+			ctx,
+			token,
+			m.operatorServiceAccountNamespace,
+			m.operatorServiceAccountName,
+		)
+	})
+}
+
+func (m *InstanceManager) requireToken(verify func(context.Context, string) error) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -46,7 +69,7 @@ func (m *InstanceManager) RequirePermission(verb, group, resource string) func(h
 			}
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 
-			if err := m.authenticator.VerifyOperatorToken(r.Context(), token, m.namespace, verb); err != nil {
+			if err := verify(r.Context(), token); err != nil {
 				http.Error(w, fmt.Sprintf("verify operator token: %v", err), http.StatusForbidden)
 				return
 			}
@@ -185,6 +208,19 @@ func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(config); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (m *InstanceManager) HandleTransferLeadership(w http.ResponseWriter, _ *http.Request) {
+	log.Printf("WARNING: Leadership transfer endpoint is waiting for implementation; request is a no-op for node %s", m.hostname)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (m *InstanceManager) HandleGetLeadership(w http.ResponseWriter, _ *http.Request) {
+	log.Printf("WARNING: Leadership state endpoint is waiting for implementation; returning placeholder leader %q", managerapi.NoLeader)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(managerapi.LeadershipStatus{Leader: managerapi.NoLeader}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

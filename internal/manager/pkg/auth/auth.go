@@ -32,23 +32,12 @@ func NewAuthenticator(config *rest.Config) (*Authenticator, error) {
 
 // VerifyOperatorToken checks if the token is valid and has the necessary permissions.
 func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespace, verb string) error {
-	tokenReview := &authnv1.TokenReview{
-		Spec: authnv1.TokenReviewSpec{
-			Token:     token,
-			Audiences: []string{config.InstanceManagerAudience},
-		},
-	}
-
-	review, err := a.clientset.AuthenticationV1().TokenReviews().Create(ctx, tokenReview, metav1.CreateOptions{})
+	review, err := a.reviewOperatorToken(ctx, token)
 	if err != nil {
-		return fmt.Errorf("failed to create token review: %w", err)
+		return err
 	}
 
-	if !review.Status.Authenticated {
-		return fmt.Errorf("token is not authenticated: %s", review.Status.Error)
-	}
-
-	// Check permission to perform the requested verb on resource in the given group in the given namespace
+	// Check permission to perform the requested verb on the MongoDB resource.
 	sar := &authzv1.SubjectAccessReview{
 		Spec: authzv1.SubjectAccessReviewSpec{
 			User:   review.Status.User.Username,
@@ -72,4 +61,41 @@ func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespac
 	}
 
 	return nil
+}
+
+// VerifyOperatorServiceAccountToken accepts only a valid instance-manager token
+// issued to the configured operator ServiceAccount.
+func (a *Authenticator) VerifyOperatorTokenIdentity(ctx context.Context, token, namespace, name string) error {
+	if namespace == "" || name == "" {
+		return fmt.Errorf("operator ServiceAccount identity is not configured")
+	}
+	review, err := a.reviewOperatorToken(ctx, token)
+	if err != nil {
+		return err
+	}
+
+	expectedUsername := fmt.Sprintf("system:serviceaccount:%s:%s", namespace, name)
+	if review.Status.User.Username != expectedUsername {
+		return fmt.Errorf("token belongs to ServiceAccount %q, expected operator ServiceAccount %q", review.Status.User.Username, expectedUsername)
+	}
+	return nil
+}
+
+func (a *Authenticator) reviewOperatorToken(ctx context.Context, token string) (*authnv1.TokenReview, error) {
+	tokenReview := &authnv1.TokenReview{
+		Spec: authnv1.TokenReviewSpec{
+			Token:     token,
+			Audiences: []string{config.InstanceManagerAudience},
+		},
+	}
+
+	review, err := a.clientset.AuthenticationV1().TokenReviews().Create(ctx, tokenReview, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token review: %w", err)
+	}
+
+	if !review.Status.Authenticated {
+		return nil, fmt.Errorf("token is not authenticated: %s", review.Status.Error)
+	}
+	return review, nil
 }

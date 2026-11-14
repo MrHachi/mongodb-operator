@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	managerapi "github.com/MrHachi/mongodb-operator/internal/manager/pkg/api"
 	managerconfig "github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
 	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 	authnv1 "k8s.io/api/authentication/v1"
@@ -161,6 +162,34 @@ func (c *Client) CreateAdmin(ctx context.Context, username, password string) err
 		return responseError("create admin user", status, body)
 	}
 	return nil
+}
+
+// TransferLeadership asks this instance-manager to move leadership away from its node.
+func (c *Client) TransferLeadership(ctx context.Context) error {
+	status, body, err := c.request(ctx, http.MethodPost, "/v1/manager/leadership/transfer", nil)
+	if err != nil {
+		return fmt.Errorf("request leadership transfer: %w", err)
+	}
+	if status != http.StatusAccepted {
+		return responseError("request leadership transfer", status, body)
+	}
+	return nil
+}
+
+// GetLeadership reports the current instance-manager leadership identity.
+func (c *Client) GetLeadership(ctx context.Context) (*managerapi.LeadershipStatus, error) {
+	status, body, err := c.request(ctx, http.MethodGet, "/v1/manager/leadership", nil)
+	if err != nil {
+		return nil, fmt.Errorf("get instance-manager leadership: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, responseError("get instance-manager leadership", status, body)
+	}
+	var leadership managerapi.LeadershipStatus
+	if err := json.Unmarshal(body, &leadership); err != nil {
+		return nil, fmt.Errorf("decode instance-manager leadership response: %w", err)
+	}
+	return &leadership, nil
 }
 
 func (c *Client) request(ctx context.Context, method, path string, payload any) (int, []byte, error) {

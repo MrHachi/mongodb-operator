@@ -13,7 +13,7 @@ func (h *InstanceManager) Serve() *chi.Mux {
 		r.Route("/mongo", func(r chi.Router) {
 			// Routes that require 'get' permission on MongoDB resources.
 			r.Group(func(r chi.Router) {
-				r.Use(h.RequirePermission("get", "db.mrhachi.dev", "mongodbs"))
+				r.Use(h.requirePermission("get", "db.mrhachi.dev", "mongodbs"))
 				r.Post("/authenticate", h.HandleAuthenticate)
 				r.Get("/topology", h.HandleGetTopology)
 				r.Get("/config", h.HandleGetConfig)
@@ -21,10 +21,16 @@ func (h *InstanceManager) Serve() *chi.Mux {
 
 			// Routes that require 'create' permission on 'mongodbs' in 'db.mrhachi.dev'
 			r.Group(func(r chi.Router) {
-				r.Use(h.RequirePermission("create", "db.mrhachi.dev", "mongodbs"))
+				r.Use(h.requirePermission("create", "db.mrhachi.dev", "mongodbs"))
 				r.Post("/initiate", h.HandleInitiate)
 				r.Post("/admin", h.HandleAdmin)
 			})
+		})
+
+		r.Route("/manager", func(r chi.Router) {
+			r.Use(h.requireOperator())
+			r.Get("/leadership", h.HandleGetLeadership)
+			r.Post("/leadership/transfer", h.HandleTransferLeadership)
 		})
 	})
 	return r

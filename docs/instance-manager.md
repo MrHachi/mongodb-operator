@@ -19,13 +19,15 @@ GHCR repository tag: `ghcr.io/mrhachi/mongodb-instance-manager`
 
 ### Security Enforcement
 
-The sidecar verifies the operator's identity using the Kubernetes API. It performs a `TokenReview` and `SubjectAccessReview` against the Kubernetes API.
+The sidecar verifies caller tokens with a Kubernetes `TokenReview`. The `/v1/mongo` endpoints also check MongoDB-resource permissions with a `SubjectAccessReview`. The `/v1/manager` endpoints instead require the authenticated username to exactly match the configured operator ServiceAccount namespace and name.
 
 The operator's ServiceAccount must have:
 
 - `create` permission on `serviceaccounts/token` for its own ServiceAccount.
 - `create` and `get` permissions for `mongodbs` in the `db.mrhachi.dev` API group.
 - `get`, `create`, `update`, and `delete` permissions for the per-MongoDB ClusterRoleBindings it reconciles.
+
+The manager endpoints accept tokens only for this operator ServiceAccount identity. The operator injects its ServiceAccount namespace and name into each instance-manager Pod as `OPERATOR_SERVICE_ACCOUNT_NAMESPACE` and `OPERATOR_SERVICE_ACCOUNT_NAME`.
 
 MongoDB Pods currently use the namespace's `default` ServiceAccount. During initialization, the operator creates a ClusterRoleBinding from that ServiceAccount to the `instance-manager-auth-role` ClusterRole, which grants only `create` on `tokenreviews` and `subjectaccessreviews`. The binding is removed by a MongoDB finalizer when the resource is deleted. This requires cluster-scoped RBAC; Helm installs must use `rbac.namespaced=false`.
 
@@ -135,6 +137,29 @@ Authenticates with the MongoDB instance and updates the connection credentials f
     - `400 Bad Request`: If the request body is invalid.
     - `500 Internal Server Error`: For other server-side errors.
 
+### 6. Get Instance-Manager Leadership
+
+Reports the node currently holding instance-manager leadership.
+
+- **Endpoint**: `GET /v1/manager/leadership`
+- **Authentication**: Requires a token for the exact operator ServiceAccount configured on the instance-manager Pod.
+- **Response Body**:
+    ```json
+    {
+        "leader": "-r-0"
+    }
+    ```
+- **Implementation Status**: Leadership state is not implemented yet. The endpoint logs a warning and returns `-r-0`, a placeholder that cannot match the operator's alphabetically suffixed replica Pod names.
+
+### 7. Request Leadership Transfer
+
+Requests that the instance-manager move leadership away from the node receiving the request.
+
+- **Endpoint**: `POST /v1/manager/leadership/transfer`
+- **Authentication**: Requires a token for the exact operator ServiceAccount configured on the instance-manager Pod.
+- **Response**: `202 Accepted`.
+- **Implementation Status**: Leadership transfer is not implemented yet. The endpoint logs a warning and accepts the request as a no-op.
+
 ## Configuration
 
 The following environment variables must be provided to the instance-manager container. These are injected by the MongoDB Operator.
@@ -145,5 +170,7 @@ The following environment variables must be provided to the instance-manager con
 | `MONGODB_HOSTNAME`     | The hostname of the MongoDB instance.                           | (Required)                  |
 | `MONGODB_SERVICE_NAME` | The Kubernetes service name for the MongoDB instance.           | (Required)                  |
 | `MONGODB_NAMESPACE`    | The Kubernetes namespace where the MongoDB instance is running. | (Required)                  |
+| `OPERATOR_SERVICE_ACCOUNT_NAMESPACE` | The namespace of the operator ServiceAccount authorized for manager endpoints. | (Required) |
+| `OPERATOR_SERVICE_ACCOUNT_NAME` | The name of the operator ServiceAccount authorized for manager endpoints. | (Required) |
 | `MONGODB_URI`          | The MongoDB connection URI.                                     | `mongodb://localhost:27017` |
 | `PORT`                 | The port on which the server listens.                           | `8080`                      |

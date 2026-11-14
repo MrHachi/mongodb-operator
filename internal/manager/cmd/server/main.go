@@ -34,7 +34,16 @@ func main() {
 		log.Fatalf("Failed to initialize authenticator: %v", err)
 	}
 
-	m := mgr.NewInstanceManager(dbClient, authenticator, cfg.RSName, cfg.Hostname, cfg.ServiceName, cfg.Namespace)
+	m := mgr.NewInstanceManager(
+		dbClient,
+		authenticator,
+		cfg.RSName,
+		cfg.Hostname,
+		cfg.ServiceName,
+		cfg.Namespace,
+		cfg.OperatorServiceAccountNamespace,
+		cfg.OperatorServiceAccountName,
+	)
 	router := m.Serve()
 
 	port := "8080"
