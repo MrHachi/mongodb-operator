@@ -22,6 +22,8 @@ A Go-based service (using the Chi router) deployed as a sidecar container within
 
 The reconciliation loop follows a state-machine approach to ensure the desired state is reached.
 
+The MongoDB watch enqueues reconciliation for resource creation and deletion, spec changes, and changes to `status.phase`. Status updates that only change `status.conditions` do not enqueue reconciliation; conditions report state and progress but do not drive the state machine.
+
 ### 1. Initialization Phase (`status.phase = Initializing`)
 
 This phase focuses on setting up the first primary node and the foundational cluster infrastructure.
