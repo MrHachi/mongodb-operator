@@ -2,6 +2,8 @@
 
 The instance-manager is a Go-based sidecar service (using the Chi router) running inside each MongoDB Pod. It provides a secure interface for the MongoDB Operator to perform sensitive administrative operations on the database.
 
+GHCR repository tag: `ghcr.io/mrhachi/mongodb-instance-manager`
+
 ## General Information
 
 - **Port**: `8080`
