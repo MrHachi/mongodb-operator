@@ -6,15 +6,10 @@ import (
 	"net/url"
 	"time"
 
+	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-)
-
-const (
-	StatePrimary   = "PRIMARY"
-	StateSecondary = "SECONDARY"
-	StateArbiter   = "ARBITER"
 )
 
 type Client struct {
@@ -121,21 +116,21 @@ func (c *Client) CreateAdminUser(ctx context.Context, username, password string)
 }
 
 // GetTopology retrieves the cluster topology from MongoDB.
-func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
+func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 	db := c.client.Database("admin")
 
 	command := bson.D{
 		{Key: "replSetGetStatus", Value: 1},
 	}
 
-	var topology Topology
+	var topology mdb.Topology
 	if err := db.RunCommand(ctx, command).Decode(&topology); err != nil {
 		return nil, fmt.Errorf("cluster not initialized: %w", err)
 	}
 
 	var primaryAppliedAt time.Time
 	for _, member := range topology.Members {
-		if member.State == StatePrimary {
+		if member.State == mdb.StatePrimary {
 			primaryAppliedAt = member.Optimes.AppliedAt
 			break
 		}
@@ -144,7 +139,7 @@ func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
 	if !primaryAppliedAt.IsZero() {
 		for i := range topology.Members {
 			member := &topology.Members[i]
-			if member.State != StateSecondary || member.Optimes.AppliedAt.IsZero() {
+			if member.State != mdb.StateSecondary || member.Optimes.AppliedAt.IsZero() {
 				continue
 			}
 			member.ReplicationLag = max(primaryAppliedAt.Sub(member.Optimes.AppliedAt), 0)
@@ -155,21 +150,21 @@ func (c *Client) GetTopology(ctx context.Context) (*Topology, error) {
 }
 
 // GetConfig retrieves the replica set voting and election configuration.
-func (c *Client) GetConfig(ctx context.Context) (*ReplicaSetConfig, error) {
+func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
 	db := c.client.Database("admin")
 	var configResponse struct {
 		Config struct {
 			Version int32 `bson:"version"`
 			Members []struct {
-				ID           int `bson:"_id"`
-				MemberConfig `bson:",inline"`
+				ID               int `bson:"_id"`
+				mdb.MemberConfig `bson:",inline"`
 			} `bson:"members"`
 		} `bson:"config"`
 	}
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&configResponse); err != nil {
 		return nil, fmt.Errorf("cluster not initialized: get replica set configuration: %w", err)
 	}
-	config := &ReplicaSetConfig{Version: configResponse.Config.Version, Members: make([]ReplicaSetConfigMember, 0, len(configResponse.Config.Members))}
+	config := &mdb.ReplicaSetConfig{Version: configResponse.Config.Version, Members: make([]mdb.ReplicaSetConfigMember, 0, len(configResponse.Config.Members))}
 	for _, member := range configResponse.Config.Members {
 		if member.Votes == nil {
 			votes := int32(1)
@@ -184,7 +179,7 @@ func (c *Client) GetConfig(ctx context.Context) (*ReplicaSetConfig, error) {
 		}
 		member.ConfigVersion = configResponse.Config.Version
 		member.VotingEligible = *member.Votes > 0 && !member.ArbiterOnly && !member.Hidden && *member.Priority > 0
-		config.Members = append(config.Members, ReplicaSetConfigMember{ID: member.ID, Config: member.MemberConfig})
+		config.Members = append(config.Members, mdb.ReplicaSetConfigMember{ID: member.ID, Config: member.MemberConfig})
 	}
 	return config, nil
 }

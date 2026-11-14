@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
-	managerdb "github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
+	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 )
 
 const (
@@ -128,7 +128,7 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 
 // selectScaleInCandidate returns an error when it can't establish that scale-in
 // is safe right now; that does not mean the reconciliation operation failed.
-func selectScaleInCandidate(topology *managerdb.Topology, config *managerdb.ReplicaSetConfig, pods []corev1.Pod, threshold time.Duration) (*corev1.Pod, error) {
+func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig, pods []corev1.Pod, threshold time.Duration) (*corev1.Pod, error) {
 	configByID, err := memberConfigsByID(topology, config)
 	if err != nil {
 		return nil, fmt.Errorf("get member configs: %w", err)
@@ -146,9 +146,9 @@ func selectScaleInCandidate(topology *managerdb.Topology, config *managerdb.Repl
 
 	secondaries := eligibleDrainSecondaries(topology.Members, podsByMemberID, configByID, threshold)
 	if len(secondaries) == 0 {
-		return nil, fmt.Errorf("no voting %s has known replication lag within the %s drainThreshold", managerdb.StateSecondary, threshold)
+		return nil, fmt.Errorf("no voting %s has known replication lag within the %s drainThreshold", mdb.StateSecondary, threshold)
 	}
-	slices.SortFunc(secondaries, func(a, b *managerdb.Member) int {
+	slices.SortFunc(secondaries, func(a, b *mdb.Member) int {
 		return cmp.Or(
 			cmp.Compare(b.ReplicationLag, a.ReplicationLag),
 			cmp.Compare(a.ID, b.ID),
@@ -166,7 +166,7 @@ func selectScaleInCandidate(topology *managerdb.Topology, config *managerdb.Repl
 	return podsByMemberID[candidate.ID], nil
 }
 
-func stableMemberPods(topology *managerdb.Topology, pods []corev1.Pod) (map[int]*corev1.Pod, error) {
+func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev1.Pod, error) {
 	if topology == nil || topology.ConfigVersion <= 0 || len(topology.Members) == 0 {
 		return nil, errors.New("replica set configuration is unavailable or unstable")
 	}
@@ -180,21 +180,21 @@ func stableMemberPods(topology *managerdb.Topology, pods []corev1.Pod) (map[int]
 			podsByMemberID[member.ID] = pod
 		}
 
-		if member.State == managerdb.StatePrimary {
+		if member.State == mdb.StatePrimary {
 			primaryCount++
 			if member.Optimes.AppliedAt.IsZero() {
-				return nil, fmt.Errorf("%s applied optime is unavailable", managerdb.StatePrimary)
+				return nil, fmt.Errorf("%s applied optime is unavailable", mdb.StatePrimary)
 			}
 		}
 	}
 
 	if primaryCount != 1 {
-		return nil, fmt.Errorf("replica set must report exactly one %s before scale-in", managerdb.StatePrimary)
+		return nil, fmt.Errorf("replica set must report exactly one %s before scale-in", mdb.StatePrimary)
 	}
 	return podsByMemberID, nil
 }
 
-func countHealthyVoters(members []managerdb.Member, configByID map[int]managerdb.MemberConfig) (int, int) {
+func countHealthyVoters(members []mdb.Member, configByID map[int]mdb.MemberConfig) (int, int) {
 	total, healthy := 0, 0
 	for i := range members {
 		member := &members[i]
@@ -204,7 +204,7 @@ func countHealthyVoters(members []managerdb.Member, configByID map[int]managerdb
 		}
 		total++
 
-		if member.State == managerdb.StatePrimary || member.State == managerdb.StateSecondary {
+		if member.State == mdb.StatePrimary || member.State == mdb.StateSecondary {
 			healthy++
 		}
 	}
@@ -212,16 +212,16 @@ func countHealthyVoters(members []managerdb.Member, configByID map[int]managerdb
 }
 
 func eligibleDrainSecondaries(
-	members []managerdb.Member,
+	members []mdb.Member,
 	podsByMemberID map[int]*corev1.Pod,
-	configByMemberID map[int]managerdb.MemberConfig,
+	configByMemberID map[int]mdb.MemberConfig,
 	threshold time.Duration,
-) []*managerdb.Member {
-	secondaries := make([]*managerdb.Member, 0, len(members))
+) []*mdb.Member {
+	secondaries := make([]*mdb.Member, 0, len(members))
 	for i := range members {
 		member := &members[i]
 
-		if member.State != managerdb.StateSecondary || !configByMemberID[member.ID].VotingEligible {
+		if member.State != mdb.StateSecondary || !configByMemberID[member.ID].VotingEligible {
 			continue
 		}
 
@@ -241,17 +241,17 @@ func eligibleDrainSecondaries(
 	return secondaries
 }
 
-func validateSurvivingMembers(members []managerdb.Member, configByID map[int]managerdb.MemberConfig, candidateID int, threshold time.Duration) error {
+func validateSurvivingMembers(members []mdb.Member, configByID map[int]mdb.MemberConfig, candidateID int, threshold time.Duration) error {
 	for i := range members {
 		member := &members[i]
 		if member.ID == candidateID || configByID[member.ID].ArbiterOnly {
 			continue
 		}
-		if member.State != managerdb.StatePrimary && member.State != managerdb.StateSecondary {
+		if member.State != mdb.StatePrimary && member.State != mdb.StateSecondary {
 			return fmt.Errorf("surviving data-bearing member %q is not healthy (state %s)", member.Host, member.State)
 		}
-		if member.State == managerdb.StateSecondary && (!member.LagAvailable || member.ReplicationLag > threshold) {
-			return fmt.Errorf("surviving %s %q is outside the %s replication health threshold", managerdb.StateSecondary, member.Host, threshold)
+		if member.State == mdb.StateSecondary && (!member.LagAvailable || member.ReplicationLag > threshold) {
+			return fmt.Errorf("surviving %s %q is outside the %s replication health threshold", mdb.StateSecondary, member.Host, threshold)
 		}
 	}
 	return nil

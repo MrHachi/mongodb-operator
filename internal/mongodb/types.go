@@ -6,6 +6,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+const (
+	StatePrimary   = "PRIMARY"
+	StateSecondary = "SECONDARY"
+	StateArbiter   = "ARBITER"
+)
+
 type Topology struct {
 	Members       []Member `bson:"members" json:"members"`
 	ConfigVersion int32    `bson:"configVersion" json:"config_version"`

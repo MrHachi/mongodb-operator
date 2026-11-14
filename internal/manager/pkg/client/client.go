@@ -12,7 +12,7 @@ import (
 	"time"
 
 	managerconfig "github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
-	managerdb "github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
+	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -74,7 +74,7 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 }
 
 // GetTopology retrieves the replica set topology and member states.
-func (c *Client) GetTopology(ctx context.Context) (*managerdb.Topology, error) {
+func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 	status, body, err := c.request(ctx, http.MethodGet, "/v1/topology", nil)
 	if err != nil {
 		return nil, fmt.Errorf("get topology: %w", err)
@@ -82,7 +82,7 @@ func (c *Client) GetTopology(ctx context.Context) (*managerdb.Topology, error) {
 
 	switch status {
 	case http.StatusOK:
-		var topology managerdb.Topology
+		var topology mdb.Topology
 		if err := json.Unmarshal(body, &topology); err != nil {
 			return nil, fmt.Errorf("decode topology response: %w", err)
 		}
@@ -95,14 +95,14 @@ func (c *Client) GetTopology(ctx context.Context) (*managerdb.Topology, error) {
 }
 
 // GetConfig retrieves the replica set voting and election configuration.
-func (c *Client) GetConfig(ctx context.Context) (*managerdb.ReplicaSetConfig, error) {
+func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
 	status, body, err := c.request(ctx, http.MethodGet, "/v1/config", nil)
 	if err != nil {
 		return nil, fmt.Errorf("get replica set configuration: %w", err)
 	}
 	switch status {
 	case http.StatusOK:
-		var config managerdb.ReplicaSetConfig
+		var config mdb.ReplicaSetConfig
 		if err := json.Unmarshal(body, &config); err != nil {
 			return nil, fmt.Errorf("decode replica set configuration response: %w", err)
 		}

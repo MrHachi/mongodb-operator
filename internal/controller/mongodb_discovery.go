@@ -28,7 +28,7 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
-	managerdb "github.com/MrHachi/mongodb-operator/internal/manager/pkg/mongodb"
+	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 )
 
 type discoveryState uint8
@@ -75,7 +75,7 @@ func (r *MongoDBReconciler) discoverPrimaryFromPods(ctx context.Context, mongodb
 
 		initializationChecked = true
 		for _, member := range topology.Members {
-			if strings.EqualFold(member.State, managerdb.StatePrimary) {
+			if strings.EqualFold(member.State, mdb.StatePrimary) {
 				primaryPod := podForMember(managedPods, member.Host)
 				if primaryPod != nil {
 					return primaryDiscovery{State: discoveryPrimaryFound, Primary: primaryPod}, nil
@@ -128,7 +128,7 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 // discoverClusterTopology obtains topology and replica-set configuration from
 // the discovered PRIMARY's instance-manager endpoint and verifies that both
 // responses describe the same configuration and member set.
-func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb *dbv1beta1.MongoDB, managedPods []corev1.Pod) (*managerdb.Topology, *managerdb.ReplicaSetConfig, error) {
+func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb *dbv1beta1.MongoDB, managedPods []corev1.Pod) (*mdb.Topology, *mdb.ReplicaSetConfig, error) {
 	discovery, err := r.discoverPrimaryFromPods(ctx, mongodb, managedPods)
 	if err != nil {
 		return nil, nil, fmt.Errorf("discover replica set primary: %w", err)
@@ -158,7 +158,7 @@ func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb
 	return topology, config, nil
 }
 
-func memberConfigsByID(topology *managerdb.Topology, config *managerdb.ReplicaSetConfig) (map[int]managerdb.MemberConfig, error) {
+func memberConfigsByID(topology *mdb.Topology, config *mdb.ReplicaSetConfig) (map[int]mdb.MemberConfig, error) {
 	if topology == nil || config == nil || topology.ConfigVersion <= 0 || config.Version <= 0 {
 		return nil, errors.New("replica set topology and/or configuration invalid")
 	}
@@ -169,7 +169,7 @@ func memberConfigsByID(topology *managerdb.Topology, config *managerdb.ReplicaSe
 		return nil, errors.New("replica set topology and configuration member lists do not match")
 	}
 
-	configs := make(map[int]managerdb.MemberConfig, len(config.Members))
+	configs := make(map[int]mdb.MemberConfig, len(config.Members))
 	for _, member := range config.Members {
 		if _, exists := configs[member.ID]; exists {
 			return nil, fmt.Errorf("replica set configuration contains duplicate member ID %d", member.ID)
@@ -205,9 +205,9 @@ func podForMember(pods []corev1.Pod, host string) *corev1.Pod {
 	return nil
 }
 
-func topologyHasPrimary(topology *managerdb.Topology) bool {
+func topologyHasPrimary(topology *mdb.Topology) bool {
 	for _, member := range topology.Members {
-		if strings.EqualFold(member.State, managerdb.StatePrimary) {
+		if strings.EqualFold(member.State, mdb.StatePrimary) {
 			return true
 		}
 	}
