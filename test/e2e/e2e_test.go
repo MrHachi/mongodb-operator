@@ -20,11 +20,13 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"text/template"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -270,15 +272,75 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("bootstraps a MongoDB cluster through Initializing", func() {
+			const testNamespace = "mongodb-e2e"
+			const clusterName = "initializing-e2e"
+
+			By("creating a namespace for the MongoDB workload")
+			cmd := exec.Command("kubectl", "create", "namespace", testNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=false")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("creating a MongoDB resource")
+			manifestTemplate, err := template.ParseFiles(filepath.Join("..", "data", "mongodb-initializing.yaml"))
+			Expect(err).NotTo(HaveOccurred())
+			var manifest bytes.Buffer
+			Expect(manifestTemplate.Execute(&manifest, struct {
+				Name      string
+				Namespace string
+			}{Name: clusterName, Namespace: testNamespace})).To(Succeed())
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = &manifest
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("observing the Initializing phase while the first Pod starts")
+			waitForStatus := func(phase, reason string) func(Gomega) {
+				return func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "mongodb", clusterName, "-n", testNamespace,
+						"-o", "jsonpath={.status.phase}{\"/\"}{.status.conditions[?(@.type=='Progressing')].reason}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal(phase + "/" + reason))
+				}
+			}
+			Eventually(waitForStatus("Initializing", "WaitingForPrimaryPod"), 3*time.Minute).Should(Succeed())
+
+			By("checking the initial member resources and generated keyfile")
+			for _, resource := range []struct{ kind, name string }{
+				{"secret", clusterName + "-keyfile"},
+				{"persistentvolumeclaim", clusterName + "-r-a-data"},
+				{"pod", clusterName + "-r-a"},
+				{"service", clusterName},
+			} {
+				cmd := exec.Command("kubectl", "get", resource.kind, resource.name, "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "%s %s should be created", resource.kind, resource.name)
+			}
+			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-keyfile", "-n", testNamespace,
+				"-o", "jsonpath={.data.mongodb-keyfile}")
+			keyfile, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(keyfile).NotTo(BeEmpty())
+
+			By("waiting for replica set initialization and admin credentials")
+			Eventually(waitForStatus("Progressing", "ReconcilingMembers"), 10*time.Minute).Should(Succeed())
+			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
+				"-o", "jsonpath={.data.username}")
+			username, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(username).NotTo(BeEmpty())
+
+			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
+				"-o", "jsonpath={.data.password}")
+			password, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(password).NotTo(BeEmpty())
+		})
 	})
 })
 
