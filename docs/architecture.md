@@ -70,9 +70,8 @@ Represents ongoing reconciliation after bootstrap. The operator ensures the clus
         - **Important:** This is the initial scaling basis; using replica-set membership or healthy voting members reported by MongoDB may be more appropriate in the future, especially during network partitions or transient failures.
     - Each reconciliation performs at most one member scale operation, then requeues and observes the cluster again before taking another action. This limits quorum risk and avoids making several decisions from stale observations.
     - **Scale-In (Draining)**:
-        1.  Select the healthy `SECONDARY` with the least recently applied optime, among members whose replication lag is within the configured `drainThreshold`. This preserves the most synchronized members as failover candidates.
-        2.  Read replica-set status from `GET /v1/mongo/topology` and voting/election settings from `GET /v1/mongo/config`. Defer if the reported topology and configuration versions differ.
-
+        1.  Read replica-set status from `GET /v1/mongo/topology` and voting/election settings from `GET /v1/mongo/config`. Defer if the reported topology and configuration versions differ.
+        2.  Select the healthy `SECONDARY` with the least recently applied optime, among members whose replication lag is within the configured `drainThreshold`. This preserves the most synchronized members as failover candidates.
         3.  Mark the selected member as draining and ensure instance-manager leadership is not on that member.
         4.  Capture a fixed majority-commit checkpoint from the current primary and wait for the selected member's durable optime to reach it.
         5.  Remove the member from the MongoDB Replica Set configuration and wait for the configuration change to be recognized.
