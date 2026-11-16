@@ -549,6 +549,9 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: mongodb.Namespace,
+			Annotations: map[string]string{
+				provisioningPodAnnotation: "true",
+			},
 			Labels: r.labels(mongodb,
 				"db.mrhachi.dev/role", "replica",
 				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),

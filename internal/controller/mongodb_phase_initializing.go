@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
@@ -145,6 +146,14 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	podName := pod.Name
 	if !podReady(pod) || pod.Status.PodIP == "" {
 		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), fmt.Sprintf("Waiting for primary Pod %s to become ready", podName), 15*time.Second)
+	}
+	if _, ok := pod.Annotations[provisioningPodAnnotation]; ok {
+		before := pod.DeepCopy()
+		delete(pod.Annotations, provisioningPodAnnotation)
+
+		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear provisioning annotation from initial Pod %s: %w", pod.Name, err)
+		}
 	}
 
 	managerClient := r.managerClientForPod(pod)
