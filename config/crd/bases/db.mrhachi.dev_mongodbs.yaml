@@ -44,6 +44,9 @@ spec:
                 description: DrainThreshold is the maximum replication lag for a secondary
                   to be considered healthy for scale-in.
                 type: string
+                x-kubernetes-validations:
+                - message: must be greater than 0s
+                  rule: duration(self) > duration('0s')
               replicas:
                 default: 1
                 description: Replicas is the desired number of MongoDB replica Pods,

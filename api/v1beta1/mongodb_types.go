@@ -94,6 +94,7 @@ type MongoDBSpec struct {
 
 	// DrainThreshold is the maximum replication lag for a secondary to be considered healthy for scale-in.
 	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="must be greater than 0s"
 	// +optional
 	DrainThreshold *metav1.Duration `json:"drainThreshold,omitempty"`
 }
