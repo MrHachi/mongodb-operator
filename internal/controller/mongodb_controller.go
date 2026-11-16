@@ -519,7 +519,7 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
 
 				// Set to "jettisoned" when instance drained and retained for a period
-				"db.mrhachi.dev/status", "in-use",
+				"db.mrhachi.dev/status", pvcStatusInUse,
 			),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -542,7 +542,7 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 	})
 }
 
-func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
+func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) (*corev1.Pod, error) {
 	log := logf.FromContext(ctx)
 	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, id)
 	pod := &corev1.Pod{
@@ -677,7 +677,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 
 	log.Info("Creating replica pod", "name", podName)
 	if err := ctrl.SetControllerReference(mongodb, pod, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on replica pod: %w", err)
+		return nil, fmt.Errorf("set owner reference on replica pod: %w", err)
 	}
 
 	existing := &corev1.Pod{}
@@ -700,18 +700,28 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 			// See docs/adr/003-safe-keyfile-rotation.md for the open questions around
 			// primary protection, replication health, mixed-key operation, and replacement retries.
 			log.Info("Replica Pod replacement is blocked pending a safe keyfile rotation procedure", "name", podName)
-			return &ReconciliationError{
+			return nil, &ReconciliationError{
 				Reason:  dbv1beta1.ReasonKeyfileRotationBlocked,
 				Message: fmt.Sprintf("replica Pod %s needs replacement to update keyfile setup, but no safe replacement procedure is defined; resolve the keyfile setup manually", podName),
 				Affects: []string{dbv1beta1.ConditionProgressing},
 			}
 		}
 	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get replica pod: %w", err)
+		return nil, fmt.Errorf("get replica pod: %w", err)
 	}
-	return ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
+
+	if err := ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
 		return r.reconcileOwnedMetadata(existing, desired)
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("ensure pod: %w", err)
+	}
+
+	pod = &corev1.Pod{}
+	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
+		return nil, fmt.Errorf("get replica pod: %w", err)
+	}
+
+	return pod, nil
 }
 
 func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {

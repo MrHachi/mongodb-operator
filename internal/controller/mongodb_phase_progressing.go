@@ -45,6 +45,7 @@ const (
 
 	pvcStatusLabel            = "db.mrhachi.dev/status"
 	pvcMemberLabel            = "db.mrhachi.dev/member"
+	pvcStatusInUse            = "in-use" // TODO: move to other file as this is not Progressing phase-specific
 	pvcStatusJettisoned       = "jettisoned"
 	pvcJettisonedAtAnnotation = "db.mrhachi.dev/jettisoned-at"
 	pvcDataTimeAnnotation     = "db.mrhachi.dev/data-time"
@@ -83,7 +84,7 @@ func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *d
 		// A selected drain always takes precedence over a new count comparison. This
 		// lets a later reconcile resume the same target after a controller restart.
 		if _, ok := pods[i].Annotations[drainingPodAnnotation]; ok {
-			return r.drainPodScaleIn(ctx, mongodb, &pods[i])
+			return r.drainReplicaScaleIn(ctx, mongodb, &pods[i])
 		}
 
 		// A provisioning Pod marks an interrupted scale-out operation. Resume its
@@ -102,7 +103,10 @@ func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *d
 	case desired > observed:
 		return r.reconcileScaleOut(ctx, mongodb, pods)
 	default:
-		return r.reconcileSteadyState(ctx, mongodb, pods)
+		if err := r.transitionReady(ctx, mongodb); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 }
 
@@ -126,7 +130,7 @@ func (r *MongoDBReconciler) listManagedReplicaPods(ctx context.Context, mongodb 
 }
 
 // reconcileScaleIn selects a member candidate to drain, marks it with the draining annotation,
-// then calls resumeScaleIn to perform the rest of the scale-in procedure.
+// then calls drainReplicaScaleIn to perform the rest of the scale-in procedure.
 func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (ctrl.Result, error) {
 	for i := range pods {
 		if pods[i].DeletionTimestamp != nil {
@@ -152,7 +156,7 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 	}
 
 	// Perform the rest of the scale-in Pod draining procedure
-	return r.drainPodScaleIn(ctx, mongodb, targetPod)
+	return r.drainReplicaScaleIn(ctx, mongodb, targetPod)
 }
 
 // selectScaleInCandidate returns an error when it can't establish that scale-in
@@ -314,12 +318,12 @@ func (r *MongoDBReconciler) markPodDraining(ctx context.Context, pod *corev1.Pod
 	return nil
 }
 
-// drainPodScaleIn performs the bulk of the scale-in procedure, ensuring instance-manager
+// drainReplicaScaleIn performs the bulk of the scale-in procedure, ensuring instance-manager
 // leadership is moved away from the selected Pod and removing it once its optime reaches
 // a given majority checkpoint.
 // If at any point removing the replica would violate voting quorum or replica-set configuration,
 // we defer scale-in and wait for stability to be restored.
-func (r *MongoDBReconciler) drainPodScaleIn(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod) (ctrl.Result, error) {
+func (r *MongoDBReconciler) drainReplicaScaleIn(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod) (ctrl.Result, error) {
 	pods, err := r.listManagedReplicaPods(ctx, mongodb)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("list managed replica Pods while performing scale-in: %w", err)
@@ -573,12 +577,17 @@ func (r *MongoDBReconciler) ensureInstanceManagerLeadershipAwayFrom(ctx context.
 	return leadership.Leader != pod.Name, nil
 }
 
+// reconcileScaleOut assigns a new replica ID, optionally reclaims a jettisoned PVC,
+// and creates the new replica's Pod, before calling provisionReplicaScaleOut to
+// perform the rest of the scale-out procedure.
 func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (ctrl.Result, error) {
+	// 1. Assign a new replica ID (or derive it from a jettisoned PVC to be reclaimed)
 	candidateID, candidatePVC, err := r.getScaleOutReplicaCandidate(ctx, mongodb, pods)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("select scale-out candidate: %w", err)
 	}
 
+	// 2. Reclaim or provision new PVC
 	if candidatePVC != nil {
 		if err := r.reclaimReplicaPVC(ctx, candidatePVC); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reclaim PVC %s for scale-out: %w", candidatePVC.Name, err)
@@ -587,13 +596,19 @@ func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1
 		return ctrl.Result{}, fmt.Errorf("ensure scale-out PVC: %w", err)
 	}
 
-	if err := r.ensureReplicaPod(ctx, mongodb, candidateID); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure scale-out Pod: %w", err)
+	// 3. Ensure replica Pod
+	pod, err := r.ensureReplicaPod(ctx, mongodb, candidateID)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure replica Pod: %w", err)
 	}
 
-	return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", mongodb.Name+"-r-"+candidateID), 15*time.Second)
+	// Perform the rest of scale-out
+	return r.provisionReplicaScaleOut(ctx, mongodb, pod, pods)
 }
 
+// provisionReplicaScaleOut waits for the given replica Pod to become ready,
+// then joins it to the MongoDB cluster and removes the provisioning
+// annotation.
 func (r *MongoDBReconciler) provisionReplicaScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod, pods []corev1.Pod) (ctrl.Result, error) {
 	if pod.Status.PodIP == "" || !podReady(pod) {
 		return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", pod.Name), 15*time.Second)
@@ -631,7 +646,7 @@ func (r *MongoDBReconciler) provisionReplicaScaleOut(ctx context.Context, mongod
 
 func (r *MongoDBReconciler) reclaimReplicaPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
 	before := pvc.DeepCopy()
-	pvc.Labels[pvcStatusLabel] = "in-use"
+	pvc.Labels[pvcStatusLabel] = pvcStatusInUse
 	delete(pvc.Annotations, pvcJettisonedAtAnnotation)
 	delete(pvc.Annotations, pvcDataTimeAnnotation)
 
@@ -699,8 +714,4 @@ func isReplicaID(id string) bool {
 		}
 	}
 	return id != ""
-}
-
-func (r *MongoDBReconciler) reconcileSteadyState(ctx context.Context, mongodb *dbv1beta1.MongoDB, _ []corev1.Pod) (ctrl.Result, error) {
-	return r.waitForReconciliation(ctx, mongodb, "ReconciliationPending", "MongoDB member health and configuration convergence is not implemented yet", 15*time.Second)
 }

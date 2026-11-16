@@ -70,13 +70,9 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial PVC: %w", err)
 		}
-		if err := r.ensureReplicaPod(ctx, mongodb, "a"); err != nil {
+		pod, err = r.ensureReplicaPod(ctx, mongodb, "a")
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial replica pod: %w", err)
-		}
-		pod = &corev1.Pod{}
-		podName := fmt.Sprintf("%s-r-a", mongodb.Name)
-		if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
-			return ctrl.Result{}, fmt.Errorf("get initial pod: %w", err)
 		}
 	case discoveryPrimaryFound:
 		// Given that the cluster is running in RS mode and we have a primary, we assume this cluster is already Initialized
@@ -147,14 +143,6 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	if !podReady(pod) || pod.Status.PodIP == "" {
 		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), fmt.Sprintf("Waiting for primary Pod %s to become ready", podName), 15*time.Second)
 	}
-	if _, ok := pod.Annotations[provisioningPodAnnotation]; ok {
-		before := pod.DeepCopy()
-		delete(pod.Annotations, provisioningPodAnnotation)
-
-		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear provisioning annotation from initial Pod %s: %w", pod.Name, err)
-		}
-	}
 
 	managerClient := r.managerClientForPod(pod)
 	topology, err := managerClient.GetTopology(ctx)
@@ -201,6 +189,16 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		}
 	} else if err != nil {
 		return ctrl.Result{}, fmt.Errorf("authenticate admin user: %w", err)
+	}
+
+	// Remove provisioning annotation once cluster has been initialized
+	if _, ok := pod.Annotations[provisioningPodAnnotation]; ok {
+		before := pod.DeepCopy()
+		delete(pod.Annotations, provisioningPodAnnotation)
+
+		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear provisioning annotation from initial Pod %s: %w", pod.Name, err)
+		}
 	}
 
 	log.Info("MongoDB cluster bootstrap completed", "name", mongodb.Name)
