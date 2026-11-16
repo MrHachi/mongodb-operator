@@ -68,7 +68,7 @@ var _ = Describe("MongoDB initialization", func() {
 			Expect(keyfile).NotTo(BeEmpty())
 
 			By("waiting for replica set initialization and admin credentials")
-			Eventually(waitForStatus("Progressing", "ReconcilingMembers"), 10*time.Minute).Should(Succeed())
+			Eventually(waitForStatus("Ready", "NotProgressing"), 10*time.Minute).Should(Succeed())
 			cmd = exec.Command("kubectl", "get", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
 				"-o", "jsonpath={.data.username}")
 			username, err := utils.Run(cmd)
@@ -137,14 +137,14 @@ var _ = Describe("MongoDB initialization", func() {
 			}, 3*time.Minute).Should(Succeed())
 
 			By("waiting for initialization to resume")
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "True", "ReconcilingMembers", 10*time.Minute)
+			waitForMongoDBStatus(testNamespace, clusterName, "Ready", "False", "NotProgressing", 10*time.Minute)
 		})
 
 		It("reports incomplete admin credentials in lifecycle conditions", func() {
 			const testNamespace = "mongodb-credentials-e2e"
 			const clusterName = "credentials-e2e"
 			createMongoDBTestResource(testNamespace, clusterName)
-			waitForMongoDBStatus(testNamespace, clusterName, "Progressing", "True", "ReconcilingMembers", 10*time.Minute)
+			waitForMongoDBStatus(testNamespace, clusterName, "Ready", "False", "NotProgressing", 10*time.Minute)
 
 			By("removing the username from the managed credentials Secret")
 			cmd := exec.Command("kubectl", "patch", "secret", clusterName+"-admin-credentials", "-n", testNamespace,
