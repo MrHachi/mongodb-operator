@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -42,6 +43,7 @@ const (
 	drainingCheckpointAnnotation = "db.mrhachi.dev/draining-checkpoint"
 
 	pvcStatusLabel            = "db.mrhachi.dev/status"
+	pvcMemberLabel            = "db.mrhachi.dev/member"
 	pvcStatusJettisoned       = "jettisoned"
 	pvcJettisonedAtAnnotation = "db.mrhachi.dev/jettisoned-at"
 	pvcDataTimeAnnotation     = "db.mrhachi.dev/data-time"
@@ -559,8 +561,95 @@ func (r *MongoDBReconciler) ensureInstanceManagerLeadershipAwayFrom(ctx context.
 	return leadership.Leader != pod.Name, nil
 }
 
-func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, _ []corev1.Pod) (ctrl.Result, error) {
-	return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", "Scale-out reconciliation is not implemented yet", 15*time.Second)
+func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (ctrl.Result, error) {
+	candidateID, candidatePVC, err := r.getScaleOutReplicaCandidate(ctx, mongodb, pods)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("select scale-out candidate: %w", err)
+	}
+
+	if candidatePVC != nil {
+		if err := r.reclaimReplicaPVC(ctx, candidatePVC); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reclaim PVC %s for scale-out: %w", candidatePVC.Name, err)
+		}
+	} else if err := r.ensurePVC(ctx, mongodb, candidateID); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure scale-out PVC: %w", err)
+	}
+	if err := r.ensureReplicaPod(ctx, mongodb, candidateID); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure scale-out Pod: %w", err)
+	}
+
+	return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", mongodb.Name+"-r-"+candidateID), 15*time.Second)
+}
+
+func (r *MongoDBReconciler) reclaimReplicaPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	before := pvc.DeepCopy()
+	pvc.Labels[pvcStatusLabel] = "in-use"
+	delete(pvc.Annotations, pvcJettisonedAtAnnotation)
+	delete(pvc.Annotations, pvcDataTimeAnnotation)
+	if err := r.Patch(ctx, pvc, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("patch PVC %s/%s: %w", pvc.Namespace, pvc.Name, err)
+	}
+	return nil
+}
+
+// getScaleOutReplicaCandidate prioritizes an eligible jettisoned PVC and
+// returns its replica ID and PVC. If no eligible PVC exists, it issues the
+// next available ID and returns a nil PVC; the caller must create the PVC.
+func (r *MongoDBReconciler) getScaleOutReplicaCandidate(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (string, *corev1.PersistentVolumeClaim, error) {
+	occupied := make(map[string]struct{}, len(pods))
+	for i := range pods {
+		if id, ok := replicaIDFromResourceName(pods[i].Name, mongodb.Name+"-r-", ""); ok {
+			occupied[id] = struct{}{}
+		}
+	}
+
+	pvcList := &corev1.PersistentVolumeClaimList{}
+	if err := r.List(ctx, pvcList, client.InNamespace(mongodb.Namespace), client.MatchingLabels(r.labels(mongodb))); err != nil {
+		return "", nil, fmt.Errorf("list managed replica PVCs: %w", err)
+	}
+	slices.SortFunc(pvcList.Items, func(a, b corev1.PersistentVolumeClaim) int { return cmp.Compare(a.Name, b.Name) })
+
+	var candidateID string
+	var candidatePVC *corev1.PersistentVolumeClaim
+	for i := range pvcList.Items {
+		replicaPvc := &pvcList.Items[i]
+
+		owner := metav1.GetControllerOf(replicaPvc)
+		if owner == nil || owner.UID != mongodb.UID || owner.Kind != dbv1beta1.MongoDBKind {
+			continue
+		}
+		if replicaPvc.Labels[pvcStatusLabel] != pvcStatusJettisoned {
+			continue
+		}
+
+		memberId := replicaPvc.Labels[pvcMemberLabel]
+		replicaId, ok := strings.CutPrefix(memberId, "r-")
+		if !ok || replicaId == "" || !isReplicaID(replicaId) {
+			continue
+		}
+		if _, exists := occupied[replicaId]; exists {
+			continue
+		}
+		candidateID, candidatePVC = replicaId, replicaPvc
+		break
+	}
+	if candidatePVC == nil {
+		var err error
+		candidateID, err = nextReplicaID(mongodb.Name, pods)
+		if err != nil {
+			return "", nil, fmt.Errorf("allocate replica ID: %w", err)
+		}
+	}
+	return candidateID, candidatePVC, nil
+}
+
+func isReplicaID(id string) bool {
+	for _, char := range id {
+		if char < 'a' || char > 'z' {
+			return false
+		}
+	}
+	return id != ""
 }
 
 func (r *MongoDBReconciler) reconcileSteadyState(ctx context.Context, mongodb *dbv1beta1.MongoDB, _ []corev1.Pod) (ctrl.Result, error) {
