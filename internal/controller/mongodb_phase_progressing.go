@@ -42,10 +42,9 @@ const (
 	drainingCheckpointAnnotation = "db.mrhachi.dev/draining-checkpoint"
 
 	pvcStatusLabel            = "db.mrhachi.dev/status"
+	pvcStatusJettisoned       = "jettisoned"
 	pvcJettisonedAtAnnotation = "db.mrhachi.dev/jettisoned-at"
 	pvcDataTimeAnnotation     = "db.mrhachi.dev/data-time"
-
-	defaultDrainThreshold = 30 * time.Second
 )
 
 var errMajorityCommitCheckpointUnavailable = errors.New("primary majority-commit checkpoint is unavailable")
@@ -121,18 +120,6 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 		}
 	}
 
-	threshold := defaultDrainThreshold
-	if mongodb.Spec.DrainThreshold != nil {
-		threshold = mongodb.Spec.DrainThreshold.Duration
-	}
-	if threshold <= 0 {
-		return ctrl.Result{}, &ReconciliationError{
-			Reason:  "InvalidDrainThreshold",
-			Message: fmt.Sprintf("drainThreshold %s must be positive", threshold),
-			Affects: []string{dbv1beta1.ConditionProgressing},
-		}
-	}
-
 	// 1. Read replica-set status and election settings from MongoDB via the instance-manager
 	topology, config, err := r.discoverClusterTopology(ctx, mongodb, pods)
 	if err != nil {
@@ -140,7 +127,7 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 	}
 
 	// 2. Select a SECONDARY to drain
-	targetPod, err := selectScaleInCandidate(topology, config, pods, threshold)
+	targetPod, err := selectScaleInCandidate(topology, config, pods, mongodb.Spec.DrainThreshold.Duration)
 	if err != nil {
 		return r.waitForReconciliation(ctx, mongodb, "ScaleInDeferred", err.Error(), 15*time.Second)
 	}
@@ -167,11 +154,6 @@ func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig
 		return nil, fmt.Errorf("get stable member pods: %w", err)
 	}
 
-	votingMembers, healthyVotingMembers := countHealthyVoters(topology.Members, configByID)
-	if votingMembers == 0 {
-		return nil, errors.New("replica set voting configuration is unavailable")
-	}
-
 	secondaries := eligibleDrainSecondaries(topology.Members, podsByMemberID, configByID, threshold)
 	if len(secondaries) == 0 {
 		return nil, fmt.Errorf("no voting %s has known replication lag within the %s drainThreshold", mdb.StateSecondary, threshold)
@@ -184,14 +166,30 @@ func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig
 	})
 
 	candidate := secondaries[0]
-
-	if healthyVotingMembers-1 < votingMembers/2+1 {
-		return nil, errors.New("removing a secondary would not preserve the current voting quorum")
-	}
-	if err := validateSurvivingMembers(topology.Members, configByID, candidate.ID, threshold); err != nil {
-		return nil, fmt.Errorf("validate surviving members: %w", err)
+	if err := verifyScaleInSafety(topology, config, candidate.ID, threshold); err != nil {
+		return nil, fmt.Errorf("verify scale-in safety: %w", err)
 	}
 	return podsByMemberID[candidate.ID], nil
+}
+
+// verifyScaleInSafety reports whether removing candidateID preserves voting
+// quorum, survivor replication health, and a stable topology/configuration view.
+func verifyScaleInSafety(topology *mdb.Topology, config *mdb.ReplicaSetConfig, candidateID int, threshold time.Duration) error {
+	configByID, err := memberConfigsByID(topology, config)
+	if err != nil {
+		return fmt.Errorf("replica set configuration is unstable: %w", err)
+	}
+	votingMembers, healthyVotingMembers := countHealthyVoters(topology.Members, configByID)
+	if votingMembers == 0 {
+		return errors.New("replica set voting configuration is unavailable")
+	}
+	if healthyVotingMembers-1 < votingMembers/2+1 {
+		return errors.New("removing a secondary would not preserve the current voting quorum")
+	}
+	if err := validateSurvivingMembers(topology.Members, configByID, candidateID, threshold); err != nil {
+		return fmt.Errorf("validate surviving members: %w", err)
+	}
+	return nil
 }
 
 func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev1.Pod, error) {
@@ -325,7 +323,7 @@ func (r *MongoDBReconciler) drainPodScaleIn(ctx context.Context, mongodb *dbv1be
 		return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Scale-in target Pod %s is no longer present", pod.Name), 15*time.Second)
 	}
 
-	topology, _, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	topology, config, err := r.discoverClusterTopology(ctx, mongodb, pods)
 	if err != nil {
 		// TODO: we will likely want to either waitForReconciliation or return a ReconciliationError, depending on the content of the error returned
 		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-in is waiting for a current replica set topology: %v", err), 15*time.Second)
@@ -338,6 +336,9 @@ func (r *MongoDBReconciler) drainPodScaleIn(ctx context.Context, mongodb *dbv1be
 	}
 
 	// 4. Ensure majority-commit checkpoint has been captured and persisted on the Pod annotations
+	// -or-
+	// Once member has been removed from MongoDB topology (member from topology == nil):
+	// 6. Drain Pod and jettison PVC
 	if member == nil {
 		var checkpointToPersist *drainCheckpoint
 		if checkpointExists {
@@ -381,6 +382,10 @@ func (r *MongoDBReconciler) drainPodScaleIn(ctx context.Context, mongodb *dbv1be
 	// Wait for draining replica's optime to pass checkpoint
 	if !optimeAtLeast(member.Optimes.DurableOptime, checkpoint.optime()) {
 		return r.waitForReconciliation(ctx, mongodb, "DrainCheckpointPending", fmt.Sprintf("Scale-in is waiting for Pod %s durable optime to reach the captured majority-commit checkpoint", pod.Name), 15*time.Second)
+	}
+
+	if err := verifyScaleInSafety(topology, config, member.ID, mongodb.Spec.DrainThreshold.Duration); err != nil {
+		return r.waitForReconciliation(ctx, mongodb, "ScaleInDeferred", err.Error(), 15*time.Second)
 	}
 
 	primary := podForMember(pods, primaryHost(topology))
@@ -451,7 +456,7 @@ func (r *MongoDBReconciler) markDrainedPVC(ctx context.Context, mongodb *dbv1bet
 	if pvc.Labels == nil {
 		pvc.Labels = make(map[string]string)
 	}
-	pvc.Labels[pvcStatusLabel] = "jettisoned"
+	pvc.Labels[pvcStatusLabel] = pvcStatusJettisoned
 	if pvc.Annotations == nil {
 		pvc.Annotations = make(map[string]string)
 	}
