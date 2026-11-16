@@ -29,16 +29,23 @@ func (r *MongoDBReconciler) reconcileReady(ctx context.Context, mongodb *dbv1bet
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
 	if len(pods) != int(mongodb.Spec.Replicas) {
 		return r.reconcileProgressing(ctx, mongodb)
 	}
+
 	for i := range pods {
-		if pods[i].Annotations[drainingPodAnnotation] != "" {
+		if _, ok := pods[i].Annotations[drainingPodAnnotation]; ok {
+			return r.reconcileProgressing(ctx, mongodb)
+		}
+		if _, ok := pods[i].Annotations[provisioningPodAnnotation]; ok {
 			return r.reconcileProgressing(ctx, mongodb)
 		}
 	}
+
 	if err := r.transitionReady(ctx, mongodb); err != nil {
 		return ctrl.Result{}, err
 	}
+
 	return ctrl.Result{}, nil
 }
