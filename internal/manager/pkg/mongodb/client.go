@@ -234,3 +234,64 @@ func (c *Client) RemoveMember(ctx context.Context, host string) error {
 	}
 	return nil
 }
+
+// AddMember adds host to the replica-set configuration. It is idempotent when
+// the host is already configured. The caller must connect to the current PRIMARY.
+func (c *Client) AddMember(ctx context.Context, host string) error {
+	db := c.client.Database("admin")
+
+	var response struct {
+		Config bson.M `bson:"config"`
+	}
+	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&response); err != nil {
+		return fmt.Errorf("get replica set configuration before adding member: %w", err)
+	}
+	if response.Config == nil {
+		return fmt.Errorf("replica set configuration is missing")
+	}
+
+	members, ok := response.Config["members"].(bson.A)
+	if !ok {
+		return fmt.Errorf("replica set configuration members have unexpected type %T", response.Config["members"])
+	}
+
+	maxID := -1
+	for _, value := range members {
+		member, ok := value.(bson.M)
+		if !ok {
+			return fmt.Errorf("replica set member has unexpected type %T", value)
+		}
+
+		memberHost, ok := member["host"].(string)
+		if !ok {
+			return fmt.Errorf("replica set member host has unexpected type %T", member["host"])
+		}
+
+		// Short-circuit and return nil if the host is already added to the cluster
+		if memberHost == host {
+			return nil
+		}
+
+		id, ok := member["_id"].(int32)
+		if !ok {
+			return fmt.Errorf("replica set member ID has unexpected type %T", member["_id"])
+		}
+
+		maxID = max(maxID, int(id))
+	}
+
+	version, ok := response.Config["version"].(int32)
+	if !ok {
+		return fmt.Errorf("replica set configuration version has unexpected type %T", response.Config["version"])
+	}
+
+	members = append(members, bson.M{"_id": int32(maxID + 1), "host": host})
+
+	response.Config["members"] = members
+	response.Config["version"] = version + 1
+
+	if err := db.RunCommand(ctx, bson.D{{Key: "replSetReconfig", Value: response.Config}}).Err(); err != nil {
+		return fmt.Errorf("reconfigure replica set with member %q: %w", host, err)
+	}
+	return nil
+}

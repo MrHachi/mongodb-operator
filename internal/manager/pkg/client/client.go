@@ -178,6 +178,19 @@ func (c *Client) RemoveMember(ctx context.Context, podName string) error {
 	return nil
 }
 
+// AddMember adds the replica associated with podName. Repeating the request is safe.
+func (c *Client) AddMember(ctx context.Context, podName string) error {
+	path := "/v1/mongo/members/" + url.PathEscape(podName)
+	status, body, err := c.request(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return fmt.Errorf("add replica-set member %q: %w", podName, err)
+	}
+	if status != http.StatusNoContent {
+		return responseError("add replica-set member", status, body)
+	}
+	return nil
+}
+
 // TransferLeadership asks this instance-manager to move leadership away from its node.
 func (c *Client) TransferLeadership(ctx context.Context) error {
 	status, body, err := c.request(ctx, http.MethodPost, "/v1/manager/leadership/transfer", nil)

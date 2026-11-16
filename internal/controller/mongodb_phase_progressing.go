@@ -578,7 +578,51 @@ func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1
 		return ctrl.Result{}, fmt.Errorf("ensure scale-out Pod: %w", err)
 	}
 
-	return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", mongodb.Name+"-r-"+candidateID), 15*time.Second)
+	return r.joinScaleOutReplica(ctx, mongodb, candidateID)
+}
+
+func (r *MongoDBReconciler) joinScaleOutReplica(ctx context.Context, mongodb *dbv1beta1.MongoDB, replicaID string) (ctrl.Result, error) {
+	pods, err := r.listManagedReplicaPods(ctx, mongodb)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list replica Pods while scaling out: %w", err)
+	}
+	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, replicaID)
+	var newPod *corev1.Pod
+	for i := range pods {
+		if pods[i].Name == podName {
+			newPod = &pods[i]
+			break
+		}
+	}
+	if newPod == nil || newPod.Status.PodIP == "" || !podReady(newPod) {
+		return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", podName), 15*time.Second)
+	}
+
+	topology, _, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	if err != nil {
+		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-out is waiting for a current replica set topology: %v", err), 15*time.Second)
+	}
+	if podForMember(pods, podName) != nil && topologyContainsPod(topology, pods, podName) {
+		return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become a SECONDARY", podName), 15*time.Second)
+	}
+	primary := podForMember(pods, primaryHost(topology))
+	if primary == nil || primary.Status.PodIP == "" || !podReady(primary) {
+		return r.waitForReconciliation(ctx, mongodb, "PrimaryUnavailable", "Scale-out is waiting for a Ready PRIMARY Pod to add the replica-set member", 15*time.Second)
+	}
+	if err := r.managerClientForPod(primary).AddMember(ctx, podName); err != nil {
+		return ctrl.Result{}, fmt.Errorf("add replica Pod %s to replica set using PRIMARY Pod %s: %w", podName, primary.Name, err)
+	}
+	return r.waitForReconciliation(ctx, mongodb, "MemberAdditionPending", fmt.Sprintf("Scale-out is waiting for replica set membership to converge for Pod %s", podName), 15*time.Second)
+}
+
+func topologyContainsPod(topology *mdb.Topology, pods []corev1.Pod, podName string) bool {
+	for i := range topology.Members {
+		pod := podForMember(pods, topology.Members[i].Host)
+		if pod != nil && pod.Name == podName {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *MongoDBReconciler) reclaimReplicaPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
@@ -652,6 +696,17 @@ func isReplicaID(id string) bool {
 	return id != ""
 }
 
-func (r *MongoDBReconciler) reconcileSteadyState(ctx context.Context, mongodb *dbv1beta1.MongoDB, _ []corev1.Pod) (ctrl.Result, error) {
-	return r.waitForReconciliation(ctx, mongodb, "ReconciliationPending", "MongoDB member and configuration convergence is not implemented yet", 15*time.Second)
+func (r *MongoDBReconciler) reconcileSteadyState(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (ctrl.Result, error) {
+	topology, _, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	if err != nil {
+		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Reconciliation is waiting for a current replica set topology: %v", err), 15*time.Second)
+	}
+	for i := range pods {
+		pod := &pods[i]
+		if pod.Status.PodIP == "" || !podReady(pod) || topologyContainsPod(topology, pods, pod.Name) {
+			continue
+		}
+		return r.joinScaleOutReplica(ctx, mongodb, strings.TrimPrefix(pod.Name, mongodb.Name+"-r-"))
+	}
+	return r.waitForReconciliation(ctx, mongodb, "ReconciliationPending", "MongoDB member health and configuration convergence is not implemented yet", 15*time.Second)
 }

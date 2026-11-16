@@ -45,7 +45,7 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 	}
 }
 
-func (m *InstanceManager) requirePermission(verb, group, resource string) func(http.Handler) http.Handler {
+func (m *InstanceManager) requirePermission(verb string) func(http.Handler) http.Handler {
 	return m.requireToken(func(ctx context.Context, token string) error {
 		return m.authenticator.VerifyOperatorToken(ctx, token, m.namespace, verb)
 	})
@@ -227,6 +227,24 @@ func (m *InstanceManager) HandleRemoveMember(w http.ResponseWriter, r *http.Requ
 	m.mu.Unlock()
 
 	if err := client.RemoveMember(r.Context(), m.memberHost(podName)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *InstanceManager) HandleAddMember(w http.ResponseWriter, r *http.Request) {
+	podName := chi.URLParam(r, "podName")
+	if podName == "" {
+		http.Error(w, "Pod name is required", http.StatusBadRequest)
+		return
+	}
+
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	if err := client.AddMember(r.Context(), m.memberHost(podName)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

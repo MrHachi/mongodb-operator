@@ -25,10 +25,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const (
+	// GroupName is the API group for MongoDB resources.
+	GroupName = "db.mrhachi.dev"
+	// MongoDBResource is the plural Kubernetes resource name used in authorization checks.
+	MongoDBResource = "mongodbs"
+)
+
 var (
 	// SchemeGroupVersion is group version used to register these objects.
 	// This name is used by applyconfiguration generators (e.g. controller-gen).
-	SchemeGroupVersion = schema.GroupVersion{Group: "db.mrhachi.dev", Version: "v1beta1"}
+	SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1beta1"}
 
 	// GroupVersion is an alias for SchemeGroupVersion, for backward compatibility.
 	GroupVersion = SchemeGroupVersion

@@ -10,12 +10,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
-)
-
-const (
-	mongodbResource = "mongodbs"
-	apiGroup        = "db.mrhachi.dev"
 )
 
 type Authenticator struct {
@@ -44,9 +40,9 @@ func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespac
 			Groups: review.Status.User.Groups,
 			ResourceAttributes: &authzv1.ResourceAttributes{
 				Verb:      verb,
-				Resource:  mongodbResource,
+				Resource:  dbv1beta1.MongoDBResource,
 				Namespace: namespace,
-				Group:     apiGroup,
+				Group:     dbv1beta1.GroupName,
 			},
 		},
 	}
@@ -57,7 +53,7 @@ func (a *Authenticator) VerifyOperatorToken(ctx context.Context, token, namespac
 	}
 
 	if !sarResult.Status.Allowed {
-		return fmt.Errorf("user %s is not allowed to %s %s in namespace %s: %v", review.Status.User.Username, verb, mongodbResource, namespace, sarResult.Status.Reason)
+		return fmt.Errorf("user %s is not allowed to %s %s in namespace %s: %v", review.Status.User.Username, verb, dbv1beta1.MongoDBResource, namespace, sarResult.Status.Reason)
 	}
 
 	return nil
