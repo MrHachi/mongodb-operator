@@ -331,6 +331,30 @@ func podReady(pod *corev1.Pod) bool {
 	return false
 }
 
+func (r *MongoDBReconciler) loadAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
+	secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, &ReconciliationError{
+				Reason:  dbv1beta1.ReasonCredentialsMissing,
+				Message: fmt.Sprintf("Admin credentials Secret %s/%s is missing; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
+		}
+		return nil, fmt.Errorf("get admin credentials secret: %w", err)
+	}
+
+	if len(secret.Data[adminUsernameKey]) == 0 || len(secret.Data[adminPasswordKey]) == 0 {
+		return nil, &ReconciliationError{
+			Reason:  dbv1beta1.ReasonCredentialsIncomplete,
+			Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
+			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+		}
+	}
+	return secret, nil
+}
+
 func (r *MongoDBReconciler) ensureAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
 	secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
 	secret := &corev1.Secret{}

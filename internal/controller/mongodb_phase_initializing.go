@@ -23,9 +23,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -111,26 +109,11 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 
 	var adminSecret *corev1.Secret
 	if !createAdminSecret {
-		adminSecret = &corev1.Secret{}
-		secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
-		if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, adminSecret); err != nil {
-			if apierrors.IsNotFound(err) {
-				return ctrl.Result{}, &ReconciliationError{
-					Reason:  dbv1beta1.ReasonCredentialsMissing,
-					Message: fmt.Sprintf("Admin credentials Secret %s/%s is missing; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName),
-					Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-				}
-			}
-			return ctrl.Result{}, fmt.Errorf("get admin credentials secret: %w", err)
+		secret, err := r.loadAdminCredentialsSecret(ctx, mongodb)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-
-		if len(adminSecret.Data[adminUsernameKey]) == 0 || len(adminSecret.Data[adminPasswordKey]) == 0 {
-			return ctrl.Result{}, &ReconciliationError{
-				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
-				Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
+		adminSecret = secret
 	} else {
 		secret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
 		if err != nil {
@@ -147,11 +130,10 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	managerClient := r.managerClientForPod(pod)
 	topology, err := managerClient.GetTopology(ctx)
 	if errors.Is(err, managerclient.ErrNotInitialized) {
-		// TODO: The instance manager currently maps every replSetGetStatus failure
-		// to ErrNotInitialized. Distinguish actual uninitialized state from other
-		// command failures, and rediscover unexpected uninitialized members before
-		// classifying a persistent block. Gate initiation on explicit bootstrap
-		// eligibility rather than only the Pod name.
+		// TODO: Distinguish actual uninitialized state from other command failures,
+		// and rediscover unexpected uninitialized members before classifying a
+		// persistent block. Gate initiation on explicit bootstrap eligibility rather
+		// than only the Pod name.
 		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
 			return ctrl.Result{}, &ReconciliationError{
 				Reason:  dbv1beta1.ReasonReplicaSetUninitialized,
