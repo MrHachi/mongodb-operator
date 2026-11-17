@@ -24,7 +24,7 @@ const responseBodyLimit = 1 << 20
 
 var (
 	ErrNotInitialized  = errors.New("replica set is not initialized")
-	ErrUnauthenticated = errors.New("operation is unauthenticated")
+	ErrUnauthenticated = errors.New("needs authentication")
 )
 
 // Client calls the HTTP API exposed by an instance-manager sidecar.
