@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -110,6 +111,9 @@ func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Requ
 
 	newURI, err := m.client.Authenticate(r.Context(), req.Username, req.Password, req.AuthSource)
 	if err != nil {
+		if writeMongoError(w, err) {
+			return
+		}
 		http.Error(w, "Authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -137,6 +141,9 @@ func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request)
 
 	err := client.InitiateReplicaSet(r.Context(), m.rsName, m.hostname)
 	if err != nil {
+		if writeMongoError(w, err) {
+			return
+		}
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already initialized") {
 			w.WriteHeader(http.StatusConflict)
 			return
@@ -161,6 +168,9 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	err := client.CreateAdminUser(r.Context(), req.Username, req.Password)
 	if err != nil {
+		if writeMongoError(w, err) {
+			return
+		}
 		if strings.Contains(err.Error(), "already exists") {
 			w.WriteHeader(http.StatusConflict)
 			return
@@ -179,11 +189,9 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 
 	topology, err := client.GetTopology(r.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "cluster not initialized") {
-			w.WriteHeader(http.StatusPreconditionFailed)
-			return
+		if !writeMongoError(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -201,11 +209,9 @@ func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request
 
 	config, err := client.GetConfig(r.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "cluster not initialized") {
-			w.WriteHeader(http.StatusPreconditionFailed)
-			return
+		if !writeMongoError(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -227,7 +233,9 @@ func (m *InstanceManager) HandleRemoveMember(w http.ResponseWriter, r *http.Requ
 	m.mu.Unlock()
 
 	if err := client.RemoveMember(r.Context(), m.memberHost(podName)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if !writeMongoError(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -245,7 +253,9 @@ func (m *InstanceManager) HandleAddMember(w http.ResponseWriter, r *http.Request
 	m.mu.Unlock()
 
 	if err := client.AddMember(r.Context(), m.memberHost(podName)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if !writeMongoError(w, err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -253,6 +263,26 @@ func (m *InstanceManager) HandleAddMember(w http.ResponseWriter, r *http.Request
 
 func (m *InstanceManager) memberHost(podName string) string {
 	return fmt.Sprintf("%s.%s.%s.svc.cluster.local:27017", podName, m.serviceName, m.namespace)
+}
+
+func writeMongoError(w http.ResponseWriter, err error) bool {
+	var code string
+	switch {
+	case errors.Is(err, mongodb.ErrNotInitialized):
+		code = managerapi.ErrorCodeMongoNotInitialized
+	case errors.Is(err, mongodb.ErrUnauthorized):
+		code = managerapi.ErrorCodeMongoUnauthorized
+	default:
+		return false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusPreconditionFailed)
+	_ = json.NewEncoder(w).Encode(managerapi.ErrorResponse{
+		Code:    code,
+		Message: err.Error(),
+	})
+	return true
 }
 
 func (m *InstanceManager) HandleTransferLeadership(w http.ResponseWriter, _ *http.Request) {

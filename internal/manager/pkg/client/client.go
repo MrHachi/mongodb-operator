@@ -20,12 +20,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+const responseBodyLimit = 1 << 20
+
 var (
 	ErrNotInitialized  = errors.New("replica set is not initialized")
-	ErrUnauthenticated = errors.New("admin credentials are unauthenticated")
+	ErrUnauthenticated = errors.New("operation is unauthenticated")
 )
-
-const responseBodyLimit = 1 << 20
 
 // Client calls the HTTP API exposed by an instance-manager sidecar.
 type Client struct {
@@ -90,6 +90,10 @@ func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 		}
 		return &topology, nil
 	case http.StatusPreconditionFailed:
+		var apiError managerapi.ErrorResponse
+		if err := json.Unmarshal(body, &apiError); err == nil && apiError.Code == managerapi.ErrorCodeMongoUnauthorized {
+			return nil, fmt.Errorf("%w: %s", ErrUnauthenticated, apiError.Message)
+		}
 		return nil, ErrNotInitialized
 	default:
 		return nil, responseError("get topology", status, body)

@@ -24,18 +24,21 @@ func NewClient(ctx context.Context, uri string) (*Client, error) {
 			SetDirect(true), // connect directly to the instance when using the localhost client
 	)
 	if err != nil {
-		return nil, fmt.Errorf("connect to mongodb: %w", err)
+		return nil, wrapMongoError("connect to MongoDB", err)
 	}
 	return &Client{client: client, uri: uri}, nil
 }
 
 func (c *Client) Close(ctx context.Context) error {
-	return c.client.Disconnect(ctx)
+	if err := c.client.Disconnect(ctx); err != nil {
+		return wrapMongoError("disconnect from MongoDB", err)
+	}
+	return nil
 }
 
 func (c *Client) Ping(ctx context.Context) error {
 	if err := c.client.Ping(ctx, nil); err != nil {
-		return fmt.Errorf("ping mongodb: %w", err)
+		return wrapMongoError("ping MongoDB", err)
 	}
 	return nil
 }
@@ -61,12 +64,12 @@ func (c *Client) Authenticate(ctx context.Context, username, password, authSourc
 			SetAuth(credential),
 	)
 	if err != nil {
-		return "", fmt.Errorf("connect to mongodb with new credentials: %w", err)
+		return "", wrapMongoError("connect to MongoDB with new credentials", err)
 	}
 
 	if err := client.Ping(ctx, nil); err != nil {
 		client.Disconnect(ctx)
-		return "", fmt.Errorf("authentication failed: %w", err)
+		return "", wrapMongoError("authenticate with MongoDB", err)
 	}
 
 	return newURI, nil
@@ -88,7 +91,7 @@ func (c *Client) InitiateReplicaSet(ctx context.Context, rsName, host string) er
 		{Key: "replSetInitiate", Value: config},
 	}).Err()
 	if err != nil {
-		return fmt.Errorf("initiate replica set: %w", err)
+		return wrapMongoError("initiate replica set", err)
 	}
 	return nil
 }
@@ -110,7 +113,7 @@ func (c *Client) CreateAdminUser(ctx context.Context, username, password string)
 		// In MongoDB, error code for duplicate key is 11000, but for createUser it might be different.
 		// Let's check if it's a "user already exists" error.
 		// For now, I'll just return the error but the handler will handle it.
-		return fmt.Errorf("create admin user: %w", err)
+		return wrapMongoError("create admin user", err)
 	}
 	return nil
 }
@@ -125,7 +128,7 @@ func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 
 	var topology mdb.Topology
 	if err := db.RunCommand(ctx, command).Decode(&topology); err != nil {
-		return nil, fmt.Errorf("cluster not initialized: %w", err)
+		return nil, wrapMongoError("get replica set status", err)
 	}
 
 	var primaryAppliedAt time.Time
@@ -162,7 +165,7 @@ func (c *Client) GetConfig(ctx context.Context) (*mdb.ReplicaSetConfig, error) {
 		} `bson:"config"`
 	}
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&configResponse); err != nil {
-		return nil, fmt.Errorf("cluster not initialized: get replica set configuration: %w", err)
+		return nil, wrapMongoError("get replica set configuration", err)
 	}
 	config := &mdb.ReplicaSetConfig{Version: configResponse.Config.Version, Members: make([]mdb.ReplicaSetConfigMember, 0, len(configResponse.Config.Members))}
 	for _, member := range configResponse.Config.Members {
@@ -193,7 +196,7 @@ func (c *Client) RemoveMember(ctx context.Context, host string) error {
 		Config bson.M `bson:"config"`
 	}
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&response); err != nil {
-		return fmt.Errorf("get replica set configuration before removing member: %w", err)
+		return wrapMongoError("get replica set configuration before removing member", err)
 	}
 	if response.Config == nil {
 		return fmt.Errorf("replica set configuration is missing")
@@ -230,7 +233,7 @@ func (c *Client) RemoveMember(ctx context.Context, host string) error {
 	response.Config["members"] = filtered
 	response.Config["version"] = version + 1
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetReconfig", Value: response.Config}}).Err(); err != nil {
-		return fmt.Errorf("reconfigure replica set without member %q: %w", host, err)
+		return wrapMongoError(fmt.Sprintf("reconfigure replica set without member %q", host), err)
 	}
 	return nil
 }
@@ -244,7 +247,7 @@ func (c *Client) AddMember(ctx context.Context, host string) error {
 		Config bson.M `bson:"config"`
 	}
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&response); err != nil {
-		return fmt.Errorf("get replica set configuration before adding member: %w", err)
+		return wrapMongoError("get replica set configuration before adding member", err)
 	}
 	if response.Config == nil {
 		return fmt.Errorf("replica set configuration is missing")
@@ -291,7 +294,7 @@ func (c *Client) AddMember(ctx context.Context, host string) error {
 	response.Config["version"] = version + 1
 
 	if err := db.RunCommand(ctx, bson.D{{Key: "replSetReconfig", Value: response.Config}}).Err(); err != nil {
-		return fmt.Errorf("reconfigure replica set with member %q: %w", host, err)
+		return wrapMongoError(fmt.Sprintf("reconfigure replica set with member %q", host), err)
 	}
 	return nil
 }
