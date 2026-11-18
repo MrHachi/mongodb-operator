@@ -50,9 +50,7 @@ This phase focuses on setting up the first primary node and the foundational clu
     - **RS Initiation**: once the Pod becomes ready, the operator does the following:
         - **RS Status Check**: the operator calls `GET /v1/mongo/topology` on the instance manager to check RS initiation status.
         - **Execute RS Initiation**: if `GET /v1/mongo/topology` returns a `412 not initialized` status, the operator calls `POST /v1/mongo/initiate`.
-    - **Admin User Creation**: once the MongoDB primary is confirmed to be running in RS mode, the operator creates the admin user.
-        - **Admin User Auth Attempt**: the operator attempts to authenticate by calling `POST /v1/mongo/authenticate` with the admin user's credentials on the instance manager.
-        - **Execute Admin User Creation**: if `POST /v1/mongo/authenticate` returns a `401 unauthenticated` status, the operator calls `POST /v1/mongo/admin` on the instance manager with the admin user's credentials.
+    - **User Creation**: once the MongoDB primary is confirmed to be running in RS mode, the operator calls `POST /v1/mongo/admin` to create the admin user, then calls `POST /v1/mongo/instance-manager` with those credentials to create or update the sidecar's restricted MongoDB user.
 - **Transition**: After cluster bootstrap, the CR `status.phase` is updated to `Progressing`. Its `Progressing` condition uses the `ReconcilingMembers` reason while replica set members are reconciled.
 
 ### 2. Progressing Phase (`status.phase = Progressing`)

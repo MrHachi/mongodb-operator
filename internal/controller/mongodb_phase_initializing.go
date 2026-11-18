@@ -39,6 +39,9 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
 	}
+	if err := r.ensureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure instance-manager credentials: %w", err)
+	}
 	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -162,15 +165,11 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	}
 	username := string(adminSecret.Data[adminUsernameKey])
 	password := string(adminSecret.Data[adminPasswordKey])
-	if err := managerClient.Authenticate(ctx, username, password); errors.Is(err, managerclient.ErrUnauthenticated) {
-		if err := managerClient.CreateAdmin(ctx, username, password); err != nil {
-			return ctrl.Result{}, fmt.Errorf("create admin user: %w", err)
-		}
-		if err := managerClient.Authenticate(ctx, username, password); err != nil {
-			return ctrl.Result{}, fmt.Errorf("authenticate newly created admin user: %w", err)
-		}
-	} else if err != nil {
-		return ctrl.Result{}, fmt.Errorf("authenticate admin user: %w", err)
+	if err := managerClient.CreateAdmin(ctx, username, password); err != nil {
+		return ctrl.Result{}, fmt.Errorf("create admin user: %w", err)
+	}
+	if err := managerClient.CreateInstanceManagerUser(ctx, username, password); err != nil {
+		return ctrl.Result{}, fmt.Errorf("create instance-manager user: %w", err)
 	}
 
 	// Remove provisioning annotation once cluster has been initialized

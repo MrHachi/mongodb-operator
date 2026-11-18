@@ -133,24 +133,26 @@ Removes the member corresponding to a managed MongoDB Pod from the replica-set c
     - `401 Unauthorized` or `403 Forbidden`: If the caller lacks authorization.
     - `500 Internal Server Error`: If MongoDB cannot read or update the replica-set configuration.
 
-### 6. Authenticate
+### 6. Instance-Manager User Initialization
 
-Authenticates with the MongoDB instance and updates the connection credentials for subsequent requests.
+Creates or updates the SCRAM user used by instance-manager MongoDB clients. The endpoint authenticates a temporary MongoDB client with the supplied admin credentials and discards it when the operation completes. It does not replace the sidecar's active client; the sidecar promotes its direct localhost client after the new user becomes available.
 
-- **Endpoint**: `POST /v1/mongo/authenticate`
-- **Description**: Verifies the provided credentials and replaces the current MongoDB client with a new one using the given authentication information.
+- **Endpoint**: `POST /v1/mongo/instance-manager`
+- **Authorization**: Requires `create` permission on `mongodbs` in `db.mrhachi.dev`.
 - **Request Body**:
     ```json
     {
-        "username": "string",
-        "password": "string",
-        "auth_source": "string"
+        "username": "admin-user",
+        "password": "admin-password"
     }
     ```
+- **Behavior**: Creates or updates the fixed `instance-manager` username with the static roles declared by the instance-manager and restricts authentication to `127.0.0.1/32` and `::1/128`. The user write waits for majority acknowledgement.
+- **Response**: `204 No Content` when the user is reconciled.
 - **Errors**:
-    - `401 Unauthorized`: If authentication fails or credentials are incorrect.
-    - `400 Bad Request`: If the request body is invalid.
-    - `500 Internal Server Error`: For other server-side errors.
+    - `400 Bad Request`: If admin credentials are missing or malformed.
+    - `401 Unauthorized`: If the supplied admin credentials are rejected.
+    - `412 Precondition Failed`: If this instance is not the replica-set primary or MongoDB is not ready.
+    - `500 Internal Server Error`: If MongoDB cannot create or update the user.
 
 ### 7. Get Instance-Manager Leadership
 
@@ -187,5 +189,6 @@ The following environment variables must be provided to the instance-manager con
 | `MONGODB_NAMESPACE`    | The Kubernetes namespace where the MongoDB instance is running. | (Required)                  |
 | `OPERATOR_SERVICE_ACCOUNT_NAMESPACE` | The namespace of the operator ServiceAccount authorized for manager endpoints. | (Required) |
 | `OPERATOR_SERVICE_ACCOUNT_NAME` | The name of the operator ServiceAccount authorized for manager endpoints. | (Required) |
-| `MONGODB_URI`          | The MongoDB connection URI.                                     | `mongodb://localhost:27017` |
+| `MONGODB_URI`          | The direct MongoDB connection URI.                              | `mongodb://127.0.0.1:27017` |
+| `INSTANCE_MANAGER_PASSWORD_FILE` | Path to the instance-manager user's password mounted from a Kubernetes Secret. | `/etc/mongodb-operator/credentials/password` |
 | `PORT`                 | The port on which the server listens.                           | `8080`                      |

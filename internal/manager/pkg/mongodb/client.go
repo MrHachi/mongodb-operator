@@ -2,8 +2,8 @@ package mongodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/url"
 	"time"
 
 	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
@@ -16,6 +16,18 @@ type Client struct {
 	client *mongo.Client
 	uri    string
 }
+
+const InstanceManagerUsername = "instance-manager"
+
+// Role describes a MongoDB role and the database where it is defined.
+type Role struct {
+	Name     string
+	Database string
+}
+
+// InstanceManagerUserRoles is the statically maintained role set for the
+// instance-manager user. Extend this list when manager capabilities require it.
+var InstanceManagerUserRoles = []Role{{Name: "clusterManager", Database: "admin"}}
 
 func NewClient(ctx context.Context, uri string) (*Client, error) {
 	client, err := mongo.Connect(ctx,
@@ -43,14 +55,8 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Authenticate verifies the provided credentials and returns a new connection URI.
-func (c *Client) Authenticate(ctx context.Context, username, password, authSource string) (string, error) {
-	u, err := url.Parse(c.uri)
-	if err != nil {
-		return "", fmt.Errorf("parse uri: %w", err)
-	}
-	newURI := u.String()
-
+// NewAuthenticatedClient connects directly to this MongoDB instance using SCRAM credentials.
+func (c *Client) NewAuthenticatedClient(ctx context.Context, username, password, authSource string) (*Client, error) {
 	credential := options.Credential{
 		AuthSource: authSource,
 		Username:   username,
@@ -60,19 +66,59 @@ func (c *Client) Authenticate(ctx context.Context, username, password, authSourc
 	client, err := mongo.Connect(
 		ctx,
 		options.Client().
-			ApplyURI(newURI).
+			ApplyURI(c.uri).
+			SetDirect(true).
 			SetAuth(credential),
 	)
 	if err != nil {
-		return "", wrapMongoError("connect to MongoDB with new credentials", err)
+		return nil, wrapMongoError("connect to MongoDB with credentials", err)
 	}
 
 	if err := client.Ping(ctx, nil); err != nil {
-		client.Disconnect(ctx)
-		return "", wrapMongoError("authenticate with MongoDB", err)
+		_ = client.Disconnect(ctx)
+		return nil, wrapMongoError("authenticate with MongoDB", err)
 	}
 
-	return newURI, nil
+	return &Client{client: client, uri: c.uri}, nil
+}
+
+// EnsureInstanceManagerUser creates or updates the SCRAM user with its fixed
+// roles and loopback-only source restrictions. Call this on the current primary.
+func (c *Client) EnsureInstanceManagerUser(ctx context.Context, password string) error {
+	if password == "" {
+		return errors.New("instance-manager password is empty")
+	}
+
+	db := c.client.Database("admin")
+	if err := db.RunCommand(ctx, instanceManagerUserCommand("createUser", password)).Err(); err != nil {
+		commandErr, isCommandErr := errors.AsType[mongo.CommandError](err)
+		if !isCommandErr || commandErr.Code != mongoUserAlreadyExistsCode {
+			return wrapMongoError("create instance-manager user", err)
+		}
+		if err := db.RunCommand(ctx, instanceManagerUserCommand("updateUser", password)).Err(); err != nil {
+			return wrapMongoError("update instance-manager user", err)
+		}
+	}
+	return nil
+}
+
+func instanceManagerUserCommand(command, password string) bson.D {
+	roles := make(bson.A, 0, len(InstanceManagerUserRoles))
+	for _, role := range InstanceManagerUserRoles {
+		roles = append(roles, bson.D{
+			{Key: "role", Value: role.Name},
+			{Key: "db", Value: role.Database},
+		})
+	}
+	return bson.D{
+		{Key: command, Value: InstanceManagerUsername},
+		{Key: "pwd", Value: password},
+		{Key: "roles", Value: roles},
+		{Key: "authenticationRestrictions", Value: bson.A{
+			bson.D{{Key: "clientSource", Value: bson.A{"127.0.0.1/32", "::1/128"}}},
+		}},
+		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+	}
 }
 
 // InitiateReplicaSet triggers the MongoDB rs.initiate() command.
@@ -109,10 +155,6 @@ func (c *Client) CreateAdminUser(ctx context.Context, username, password string)
 	}
 
 	if err := db.RunCommand(ctx, command).Err(); err != nil {
-		// Check if error is because user already exists
-		// In MongoDB, error code for duplicate key is 11000, but for createUser it might be different.
-		// Let's check if it's a "user already exists" error.
-		// For now, I'll just return the error but the handler will handle it.
 		return wrapMongoError("create admin user", err)
 	}
 	return nil

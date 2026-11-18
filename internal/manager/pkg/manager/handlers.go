@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	managerapi "github.com/MrHachi/mongodb-operator/internal/manager/pkg/api"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/auth"
@@ -17,8 +19,10 @@ import (
 )
 
 type InstanceManager struct {
-	mu     sync.Mutex
-	client *mongodb.Client
+	mu                          sync.RWMutex
+	client                      *mongodb.Client
+	clientIsDirect              bool
+	instanceManagerPasswordFile string
 
 	authenticator                   *auth.Authenticator
 	rsName, hostname                string
@@ -28,11 +32,13 @@ type InstanceManager struct {
 	operatorServiceAccountName      string
 }
 
-func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, rsName, hostname, serviceName, namespace, operatorServiceAccountNamespace, operatorServiceAccountName string) *InstanceManager {
+func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, instanceManagerPasswordFile, rsName, hostname, serviceName, namespace, operatorServiceAccountNamespace, operatorServiceAccountName string) *InstanceManager {
 	return &InstanceManager{
-		client:        client,
-		authenticator: authenticator,
-		rsName:        rsName,
+		client:                      client,
+		clientIsDirect:              true,
+		instanceManagerPasswordFile: instanceManagerPasswordFile,
+		authenticator:               authenticator,
+		rsName:                      rsName,
 		hostname: fmt.Sprintf(
 			"%s.%s.%s.svc.cluster.local:27017",
 			hostname,
@@ -44,6 +50,74 @@ func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticato
 		operatorServiceAccountNamespace: operatorServiceAccountNamespace,
 		operatorServiceAccountName:      operatorServiceAccountName,
 	}
+}
+
+// RunPromotionLoop periodically promotes the direct localhost client once the
+// instance-manager MongoDB user is available.
+func (m *InstanceManager) RunPromotionLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.promoteClient(ctx)
+		}
+	}
+}
+
+func (m *InstanceManager) promoteClient(ctx context.Context) {
+	m.mu.RLock()
+	if !m.clientIsDirect {
+		m.mu.RUnlock()
+		return
+	}
+	directClient := m.client
+	m.mu.RUnlock()
+	password, err := m.readInstanceManagerPassword()
+	if err != nil {
+		return
+	}
+
+	authenticatedClient, err := directClient.NewAuthenticatedClient(
+		ctx,
+		mongodb.InstanceManagerUsername,
+		password,
+		"admin",
+	)
+	if err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	if !m.clientIsDirect {
+		m.mu.Unlock()
+		_ = authenticatedClient.Close(context.Background())
+		return
+	}
+	m.client = authenticatedClient
+	m.clientIsDirect = false
+	m.mu.Unlock()
+
+	_ = directClient.Close(context.Background())
+}
+
+func (m *InstanceManager) acquireClient() (*mongodb.Client, func()) {
+	m.mu.RLock()
+	return m.client, m.mu.RUnlock
+}
+
+func (m *InstanceManager) readInstanceManagerPassword() (string, error) {
+	passwordBytes, err := os.ReadFile(m.instanceManagerPasswordFile)
+	if err != nil {
+		return "", fmt.Errorf("read instance-manager password file: %w", err)
+	}
+	password := strings.TrimSpace(string(passwordBytes))
+	if password == "" {
+		return "", fmt.Errorf("instance-manager password file is empty")
+	}
+	return password, nil
 }
 
 func (m *InstanceManager) requirePermission(verb string) func(http.Handler) http.Handler {
@@ -88,9 +162,8 @@ func (m *InstanceManager) HandleLivez(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (m *InstanceManager) HandleReadyz(w http.ResponseWriter, r *http.Request) {
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	if client == nil || client.Ping(r.Context()) != nil {
 		http.Error(w, "MongoDB is not ready", http.StatusServiceUnavailable)
@@ -99,45 +172,9 @@ func (m *InstanceManager) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (m *InstanceManager) HandleAuthenticate(w http.ResponseWriter, r *http.Request) {
-	var req AuthenticationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	newURI, err := m.client.Authenticate(r.Context(), req.Username, req.Password, req.AuthSource)
-	if err != nil {
-		if writeMongoError(w, err) {
-			return
-		}
-		http.Error(w, "Authentication failed", http.StatusUnauthorized)
-		return
-	}
-
-	newClient, err := mongodb.NewClient(r.Context(), newURI)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	oldClient := m.client
-	m.client = newClient
-
-	if oldClient != nil {
-		go oldClient.Close(context.Background())
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
 func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request) {
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	err := client.InitiateReplicaSet(r.Context(), m.rsName, m.hostname)
 	if err != nil {
@@ -157,16 +194,23 @@ func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request)
 
 func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 	var req AdminRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	if err := decoder.Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+		http.Error(w, "Invalid admin credentials", http.StatusBadRequest)
 		return
 	}
 
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
-	err := client.CreateAdminUser(r.Context(), req.Username, req.Password)
+	adminClient, err := client.NewAuthenticatedClient(r.Context(), req.Username, req.Password, "admin")
+	if err == nil {
+		_ = adminClient.Close(context.Background())
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	err = client.CreateAdminUser(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if writeMongoError(w, err) {
 			return
@@ -182,10 +226,48 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (m *InstanceManager) HandleInstanceManagerUser(w http.ResponseWriter, r *http.Request) {
+	var req AdminRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	if err := decoder.Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+		http.Error(w, "Invalid admin credentials", http.StatusBadRequest)
+		return
+	}
+
+	client, release := m.acquireClient()
+	defer release()
+	adminClient, err := client.NewAuthenticatedClient(r.Context(), req.Username, req.Password, "admin")
+	if err != nil {
+		if errors.Is(err, mongodb.ErrAuthenticationFailed) {
+			http.Error(w, "Admin authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if writeMongoError(w, err) {
+			return
+		}
+		http.Error(w, "Could not authenticate with MongoDB", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = adminClient.Close(context.Background()) }()
+
+	instanceManagerPassword, err := m.readInstanceManagerPassword()
+	if err != nil {
+		http.Error(w, "Could not read instance-manager credentials", http.StatusInternalServerError)
+		return
+	}
+	if err := adminClient.EnsureInstanceManagerUser(r.Context(), instanceManagerPassword); err != nil {
+		if writeMongoError(w, err) {
+			return
+		}
+		http.Error(w, "Could not create or update instance-manager user", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Request) {
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	topology, err := client.GetTopology(r.Context())
 	if err != nil {
@@ -203,9 +285,8 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 }
 
 func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	config, err := client.GetConfig(r.Context())
 	if err != nil {
@@ -228,9 +309,8 @@ func (m *InstanceManager) HandleRemoveMember(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	if err := client.RemoveMember(r.Context(), m.memberHost(podName)); err != nil {
 		if !writeMongoError(w, err) {
@@ -248,9 +328,8 @@ func (m *InstanceManager) HandleAddMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	m.mu.Lock()
-	client := m.client
-	m.mu.Unlock()
+	client, release := m.acquireClient()
+	defer release()
 
 	if err := client.AddMember(r.Context(), m.memberHost(podName)); err != nil {
 		if !writeMongoError(w, err) {
@@ -296,12 +375,6 @@ func (m *InstanceManager) HandleGetLeadership(w http.ResponseWriter, _ *http.Req
 	if err := json.NewEncoder(w).Encode(managerapi.LeadershipStatus{Leader: managerapi.NoLeader}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-type AuthenticationRequest struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	AuthSource string `json:"auth_source"`
 }
 
 type AdminRequest struct {

@@ -23,8 +23,8 @@ import (
 const responseBodyLimit = 1 << 20
 
 var (
-	ErrNotInitialized  = errors.New("replica set is not initialized")
-	ErrUnauthenticated = errors.New("needs authentication")
+	ErrNotInitialized = errors.New("replica set is not initialized")
+	ErrUnauthorized   = errors.New("needs authentication")
 )
 
 // Client calls the HTTP API exposed by an instance-manager sidecar.
@@ -92,7 +92,7 @@ func (c *Client) GetTopology(ctx context.Context) (*mdb.Topology, error) {
 	case http.StatusPreconditionFailed:
 		var apiError managerapi.ErrorResponse
 		if err := json.Unmarshal(body, &apiError); err == nil && apiError.Code == managerapi.ErrorCodeMongoUnauthorized {
-			return nil, fmt.Errorf("%w: %s", ErrUnauthenticated, apiError.Message)
+			return nil, fmt.Errorf("%w: %s", ErrUnauthorized, apiError.Message)
 		}
 		return nil, ErrNotInitialized
 	default:
@@ -132,27 +132,6 @@ func (c *Client) Initiate(ctx context.Context) error {
 	return nil
 }
 
-// Authenticate verifies the admin credentials and switches the sidecar's MongoDB client to them.
-func (c *Client) Authenticate(ctx context.Context, username, password string) error {
-	request := struct {
-		Username   string `json:"username"`
-		Password   string `json:"password"`
-		AuthSource string `json:"auth_source"`
-	}{Username: username, Password: password, AuthSource: "admin"}
-	status, body, err := c.request(ctx, http.MethodPost, "/v1/mongo/authenticate", request)
-	if err != nil {
-		return fmt.Errorf("authenticate admin user: %w", err)
-	}
-	switch status {
-	case http.StatusOK:
-		return nil
-	case http.StatusUnauthorized:
-		return ErrUnauthenticated
-	default:
-		return responseError("authenticate admin user", status, body)
-	}
-}
-
 // CreateAdmin creates the admin user. A conflict means the user already exists.
 func (c *Client) CreateAdmin(ctx context.Context, username, password string) error {
 	request := struct {
@@ -165,6 +144,34 @@ func (c *Client) CreateAdmin(ctx context.Context, username, password string) err
 	}
 	if status != http.StatusOK && status != http.StatusConflict {
 		return responseError("create admin user", status, body)
+	}
+	return nil
+}
+
+// CreateInstanceManagerUser creates or updates the sidecar's MongoDB SCRAM user
+// using the provided admin credentials.
+func (c *Client) CreateInstanceManagerUser(ctx context.Context, adminUsername, adminPassword string) error {
+	request := struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{Username: adminUsername, Password: adminPassword}
+	status, body, err := c.request(ctx, http.MethodPost, "/v1/mongo/instance-manager", request)
+	if err != nil {
+		return fmt.Errorf("create or update instance-manager user: %w", err)
+	}
+	if status == http.StatusPreconditionFailed {
+		var apiError managerapi.ErrorResponse
+		if json.Unmarshal(body, &apiError) == nil {
+			switch apiError.Code {
+			case managerapi.ErrorCodeMongoNotInitialized:
+				return ErrNotInitialized
+			case managerapi.ErrorCodeMongoUnauthorized:
+				return ErrUnauthorized
+			}
+		}
+	}
+	if status != http.StatusNoContent {
+		return responseError("create or update instance-manager user", status, body)
 	}
 	return nil
 }

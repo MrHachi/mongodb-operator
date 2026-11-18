@@ -67,6 +67,9 @@ func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *d
 	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
 	}
+	if err := r.ensureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure instance-manager credentials: %w", err)
+	}
 	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 	}

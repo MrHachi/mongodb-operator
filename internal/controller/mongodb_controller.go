@@ -56,6 +56,10 @@ const (
 	adminUsernameKey             = "username"
 	adminPasswordKey             = "password"
 	keyfileVolumeName            = "keyfile"
+	instanceManagerPasswordKey   = "password"
+	instanceManagerPasswordSize  = 1024
+	instanceManagerSecretVolume  = "instance-manager-credentials"
+	instanceManagerSecretMount   = "/etc/mongodb-operator/credentials"
 	instanceManagerRBACFinalizer = "db.mrhachi.dev/instance-manager-rbac"
 )
 
@@ -511,6 +515,69 @@ func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *db
 	})
 }
 
+func (r *MongoDBReconciler) ensureInstanceManagerCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
+	secretName := fmt.Sprintf("%s-instance-manager-credentials", mongodb.Name)
+
+	existing := &corev1.Secret{}
+	var password []byte
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, existing); err == nil {
+		password = existing.Data[instanceManagerPasswordKey]
+		if !validInstanceManagerPassword(password) {
+			return &ReconciliationError{
+				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
+				Message: fmt.Sprintf("Instance-manager credentials Secret %s/%s must contain a %d-character URL-safe password; restore the credential to resume reconciliation", mongodb.Namespace, secretName, instanceManagerPasswordSize),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get instance-manager credentials Secret: %w", err)
+	} else {
+		randomBytes := make([]byte, 768)
+		if _, err := rand.Read(randomBytes); err != nil {
+			return fmt.Errorf("generate instance-manager password: %w", err)
+		}
+		password = []byte(base64.RawURLEncoding.EncodeToString(randomBytes))
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: mongodb.Namespace,
+			Labels:    r.labels(mongodb, "app.kubernetes.io/component", "instance-manager"),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			instanceManagerPasswordKey: password,
+		},
+	}
+	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on instance-manager credentials Secret: %w", err)
+	}
+	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
+		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
+			return err
+		}
+		existing.Type = desired.Type
+
+		if !validInstanceManagerPassword(existing.Data[instanceManagerPasswordKey]) {
+			return &ReconciliationError{
+				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
+				Message: fmt.Sprintf("Instance-manager credentials Secret %s/%s must contain a %d-character URL-safe password; restore the credential to resume reconciliation", mongodb.Namespace, secretName, instanceManagerPasswordSize),
+				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
+			}
+		}
+		return nil
+	})
+}
+
+func validInstanceManagerPassword(password []byte) bool {
+	if len(password) != instanceManagerPasswordSize {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(string(password))
+	return err == nil && len(decoded) == 768
+}
+
 func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
 	// MongoDB keyfiles accept base64 characters and must be no longer than
 	// 1024 characters. 756 random bytes encode to 1008 base64 characters.
@@ -569,6 +636,8 @@ func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.Mo
 func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) (*corev1.Pod, error) {
 	log := logf.FromContext(ctx)
 	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, id)
+	instanceManagerSecretMode := int32(0o440)
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -623,6 +692,7 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 						{Name: "MONGODB_NAMESPACE", Value: mongodb.Namespace},
 						{Name: "OPERATOR_SERVICE_ACCOUNT_NAMESPACE", Value: r.Config.ServiceAccountNamespace},
 						{Name: "OPERATOR_SERVICE_ACCOUNT_NAME", Value: r.Config.ServiceAccountName},
+						{Name: "INSTANCE_MANAGER_PASSWORD_FILE", Value: instanceManagerSecretMount + "/" + instanceManagerPasswordKey},
 					},
 					Ports: []corev1.ContainerPort{
 						{
@@ -639,6 +709,13 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 						ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/readyz", Port: intstr.FromString("http"), Scheme: corev1.URISchemeHTTP}},
 						PeriodSeconds: 5, TimeoutSeconds: 2,
 						FailureThreshold: 3, SuccessThreshold: 1,
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      instanceManagerSecretVolume + "-secret",
+							MountPath: instanceManagerSecretMount,
+							ReadOnly:  true,
+						},
 					},
 				},
 				{
@@ -672,6 +749,16 @@ func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1b
 				},
 			},
 			Volumes: []corev1.Volume{
+				{
+					Name: instanceManagerSecretVolume + "-secret",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName:  fmt.Sprintf("%s-instance-manager-credentials", mongodb.Name),
+							Items:       []corev1.KeyToPath{{Key: instanceManagerPasswordKey, Path: instanceManagerPasswordKey}},
+							DefaultMode: &instanceManagerSecretMode,
+						},
+					},
+				},
 				{
 					Name: keyfileVolumeName + "-secret",
 					VolumeSource: corev1.VolumeSource{

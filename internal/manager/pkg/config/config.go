@@ -6,6 +6,9 @@ import (
 
 const InstanceManagerAudience = "db.mrhachi.dev/mongodb/instance-manager"
 
+const DefaultMongoURI = "mongodb://127.0.0.1:27017"
+const DefaultInstanceManagerPasswordFile = "/etc/mongodb-operator/credentials/password"
+
 type Config struct {
 	RSName                          string
 	Hostname                        string
@@ -13,6 +16,8 @@ type Config struct {
 	Namespace                       string
 	OperatorServiceAccountName      string
 	OperatorServiceAccountNamespace string
+	MongoURI                        string
+	InstanceManagerPasswordFile     string
 }
 
 func LoadConfig() *Config {
@@ -23,6 +28,8 @@ func LoadConfig() *Config {
 		Namespace:                       getEnv("MONGODB_NAMESPACE", ""),
 		OperatorServiceAccountName:      getEnv("OPERATOR_SERVICE_ACCOUNT_NAME", ""),
 		OperatorServiceAccountNamespace: getEnv("OPERATOR_SERVICE_ACCOUNT_NAMESPACE", ""),
+		MongoURI:                        getEnv("MONGODB_URI", DefaultMongoURI),
+		InstanceManagerPasswordFile:     getEnv("INSTANCE_MANAGER_PASSWORD_FILE", DefaultInstanceManagerPasswordFile),
 	}
 }
 

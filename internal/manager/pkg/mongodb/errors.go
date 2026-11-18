@@ -8,13 +8,17 @@ import (
 )
 
 var (
-	ErrNotInitialized = errors.New("replica set is not initialized")
-	ErrUnauthorized   = errors.New("MongoDB command requires authentication")
+	ErrNotInitialized       = errors.New("replica set is not initialized")
+	ErrUnauthorized         = errors.New("MongoDB command requires authentication")
+	ErrAuthenticationFailed = errors.New("MongoDB authentication failed")
 )
 
 const (
-	mongoUnauthorizedCode   = 13
-	mongoNotInitializedCode = 94
+	mongoUnauthorizedCode         = 13
+	mongoNotInitializedCode       = 94
+	mongoAuthenticationFailedCode = 18
+
+	mongoUserAlreadyExistsCode = 51003
 )
 
 func wrapMongoError(operation string, err error) error {
@@ -24,6 +28,8 @@ func wrapMongoError(operation string, err error) error {
 			return fmt.Errorf("%s: %w: %w", operation, ErrUnauthorized, err)
 		case mongoNotInitializedCode:
 			return fmt.Errorf("%s: %w: %w", operation, ErrNotInitialized, err)
+		case mongoAuthenticationFailedCode:
+			return fmt.Errorf("%s: %w", operation, ErrAuthenticationFailed)
 		}
 	}
 	return fmt.Errorf("%s: %w", operation, err)

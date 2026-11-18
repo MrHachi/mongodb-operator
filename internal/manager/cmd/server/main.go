@@ -22,8 +22,7 @@ func main() {
 		log.Println("Failed to load in-cluster config, using default kubeconfig")
 	}
 
-	dbURI := "mongodb://localhost:27017"
-	dbClient, err := mongodb.NewClient(ctx, dbURI)
+	dbClient, err := mongodb.NewClient(ctx, cfg.MongoURI)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -37,6 +36,7 @@ func main() {
 	m := mgr.NewInstanceManager(
 		dbClient,
 		authenticator,
+		cfg.InstanceManagerPasswordFile,
 		cfg.RSName,
 		cfg.Hostname,
 		cfg.ServiceName,
@@ -44,6 +44,7 @@ func main() {
 		cfg.OperatorServiceAccountNamespace,
 		cfg.OperatorServiceAccountName,
 	)
+	go m.RunPromotionLoop(ctx)
 	router := m.Serve()
 
 	port := "8080"
