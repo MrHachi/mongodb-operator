@@ -126,8 +126,8 @@ func (r *MongoDBReconciler) discoverPrimary(ctx context.Context, mongodb *dbv1be
 }
 
 // discoverClusterTopology obtains topology and replica-set configuration from
-// the discovered PRIMARY's instance-manager endpoint and verifies that both
-// responses describe the same configuration and member set.
+// the discovered PRIMARY's instance-manager endpoint and verifies that their
+// configuration versions agree.
 func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb *dbv1beta1.MongoDB, managedPods []corev1.Pod) (*mdb.Topology, *mdb.ReplicaSetConfig, error) {
 	discovery, err := r.discoverPrimaryFromPods(ctx, mongodb, managedPods)
 	if err != nil {
@@ -152,76 +152,53 @@ func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb
 		return nil, nil, fmt.Errorf("get configuration from primary Pod %s: %w", discovery.Primary.Name, err)
 	}
 
-	if err := validateTopologyAndConfig(topology, config); err != nil {
-		return nil, nil, fmt.Errorf("validate topology and config: %w", err)
+	if err := validatePrimaryConfigVersion(topology, config); err != nil {
+		return nil, nil, fmt.Errorf("validate PRIMARY configuration version: %w", err)
 	}
 	return topology, config, nil
 }
 
-func validateTopologyAndConfig(topology *mdb.Topology, config *mdb.ReplicaSetConfig) error {
+func primaryConfigVersion(topology *mdb.Topology) (int32, error) {
 	if topology == nil {
-		return errors.New("received nil topology")
-	}
-	if config == nil {
-		return errors.New("received nil config")
-	}
-
-	if config.Version <= 0 {
-		return errors.New("replica set configuration version is invalid")
+		return 0, errors.New("received nil topology")
 	}
 	if len(topology.Members) == 0 {
-		return errors.New("replica set topology member list empty")
+		return 0, errors.New("replica set topology member list empty")
 	}
 
 	primaryCount := 0
-	var primaryConfigVersion int32
+	var version int32
 	for _, member := range topology.Members {
-		if member.State == mdb.StatePrimary {
+		if strings.EqualFold(member.State, mdb.StatePrimary) {
 			primaryCount++
-			primaryConfigVersion = member.ConfigVersion
+			version = member.ConfigVersion
 		}
 	}
 	if primaryCount != 1 {
-		return fmt.Errorf("replica set topology must report exactly one PRIMARY; found %d", primaryCount)
+		return 0, fmt.Errorf("replica set topology must report exactly one PRIMARY; found %d", primaryCount)
 	}
-	if primaryConfigVersion <= 0 {
-		return errors.New("PRIMARY replica set configuration version is invalid")
+	if version <= 0 {
+		return 0, errors.New("PRIMARY replica set configuration version is invalid")
 	}
-	if config.Version != primaryConfigVersion {
-		return fmt.Errorf("replica set PRIMARY configuration version %d does not match configuration version %d", primaryConfigVersion, config.Version)
-	}
-
-	if len(topology.Members) != len(config.Members) {
-		return errors.New("replica set topology and configuration member lists do not match")
-	}
-	return nil
+	return version, nil
 }
 
-func memberConfigsByID(topology *mdb.Topology, config *mdb.ReplicaSetConfig) (map[int]mdb.MemberConfig, error) {
-	if err := validateTopologyAndConfig(topology, config); err != nil {
-		return nil, fmt.Errorf("validate topology and config: %w", err)
+func validatePrimaryConfigVersion(topology *mdb.Topology, config *mdb.ReplicaSetConfig) error {
+	if config == nil {
+		return errors.New("received nil config")
+	}
+	if config.Version <= 0 {
+		return errors.New("replica set configuration version is invalid")
 	}
 
-	configs := make(map[int]mdb.MemberConfig, len(config.Members))
-	for _, member := range config.Members {
-		if _, exists := configs[member.ID]; exists {
-			return nil, fmt.Errorf("replica set configuration contains duplicate member ID %d", member.ID)
-		}
-		configs[member.ID] = member.Config
+	version, err := primaryConfigVersion(topology)
+	if err != nil {
+		return fmt.Errorf("get PRIMARY configuration version: %w", err)
 	}
-
-	seenMembers := make(map[int]struct{}, len(topology.Members))
-	for _, member := range topology.Members {
-		if _, exists := seenMembers[member.ID]; exists {
-			return nil, fmt.Errorf("replica set topology contains duplicate member ID %d", member.ID)
-		}
-		seenMembers[member.ID] = struct{}{}
-
-		if _, ok := configs[member.ID]; !ok {
-			return nil, fmt.Errorf("replica set configuration is missing member ID %d", member.ID)
-		}
+	if config.Version != version {
+		return fmt.Errorf("replica set PRIMARY configuration version %d does not match configuration version %d", version, config.Version)
 	}
-	return configs, nil
+	return nil
 }
 
 func podForMember(pods []corev1.Pod, host string) *corev1.Pod {

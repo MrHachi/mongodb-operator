@@ -165,9 +165,8 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 // selectScaleInCandidate returns an error when it can't establish that scale-in
 // is safe right now; that does not mean the reconciliation operation failed.
 func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig, pods []corev1.Pod, threshold time.Duration) (*corev1.Pod, error) {
-	configByID, err := memberConfigsByID(topology, config)
-	if err != nil {
-		return nil, fmt.Errorf("get member configs: %w", err)
+	if err := validateTopologyConfigMembers(topology, config); err != nil {
+		return nil, fmt.Errorf("validate topology and configuration members: %w", err)
 	}
 
 	podsByMemberID, err := stableMemberPods(topology, pods)
@@ -175,18 +174,22 @@ func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig
 		return nil, fmt.Errorf("get stable member pods: %w", err)
 	}
 
-	secondaries := eligibleDrainSecondaries(topology.Members, podsByMemberID, configByID, threshold)
-	if len(secondaries) == 0 {
+	secondaries := eligibleDrainSecondaries(topology.Members, podsByMemberID, threshold)
+	votingSecondaries, err := filterVotingEligibleSecondaries(secondaries, config)
+	if err != nil {
+		return nil, fmt.Errorf("check voting eligibility: %w", err)
+	}
+	if len(votingSecondaries) == 0 {
 		return nil, fmt.Errorf("no voting %s has known replication lag within the %s drainThreshold", mdb.StateSecondary, threshold)
 	}
-	slices.SortFunc(secondaries, func(a, b *mdb.Member) int {
+	slices.SortFunc(votingSecondaries, func(a, b *mdb.Member) int {
 		return cmp.Or(
 			cmp.Compare(b.ReplicationLag, a.ReplicationLag),
 			cmp.Compare(a.ID, b.ID),
 		)
 	})
 
-	candidate := secondaries[0]
+	candidate := votingSecondaries[0]
 	if err := verifyScaleInSafety(topology, config, candidate.ID, threshold); err != nil {
 		return nil, fmt.Errorf("verify scale-in safety: %w", err)
 	}
@@ -196,18 +199,22 @@ func selectScaleInCandidate(topology *mdb.Topology, config *mdb.ReplicaSetConfig
 // verifyScaleInSafety reports whether removing candidateID preserves voting
 // quorum, survivor replication health, and a stable topology/configuration view.
 func verifyScaleInSafety(topology *mdb.Topology, config *mdb.ReplicaSetConfig, candidateID int, threshold time.Duration) error {
-	configByID, err := memberConfigsByID(topology, config)
-	if err != nil {
+	if err := validateTopologyConfigMembers(topology, config); err != nil {
 		return fmt.Errorf("replica set configuration is unstable: %w", err)
 	}
-	votingMembers, healthyVotingMembers := countHealthyVoters(topology.Members, configByID)
+
+	votingMembers, healthyVotingMembers, err := countHealthyVoters(topology.Members, config)
+	if err != nil {
+		return fmt.Errorf("count healthy voting members: %w", err)
+	}
 	if votingMembers == 0 {
 		return errors.New("replica set voting configuration is unavailable")
 	}
 	if healthyVotingMembers-1 < votingMembers/2+1 {
 		return errors.New("removing a secondary would not preserve the current voting quorum")
 	}
-	if err := validateSurvivingMembers(topology.Members, configByID, candidateID, threshold); err != nil {
+
+	if err := validateSurvivingMembers(topology.Members, config, candidateID, threshold); err != nil {
 		return fmt.Errorf("validate surviving members: %w", err)
 	}
 	return nil
@@ -244,12 +251,15 @@ func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev
 	return podsByMemberID, nil
 }
 
-func countHealthyVoters(members []mdb.Member, configByID map[int]mdb.MemberConfig) (int, int) {
+func countHealthyVoters(members []mdb.Member, config *mdb.ReplicaSetConfig) (int, int, error) {
 	total, healthy := 0, 0
 	for i := range members {
 		member := &members[i]
-		config := configByID[member.ID]
-		if config.Votes == nil || *(config.Votes) == 0 {
+		configMember, ok := configMemberForID(config, member.ID)
+		if !ok {
+			return 0, 0, fmt.Errorf("replica set configuration is missing member ID %d", member.ID)
+		}
+		if configMember.Config.Votes == nil || *configMember.Config.Votes == 0 {
 			continue
 		}
 		total++
@@ -258,20 +268,15 @@ func countHealthyVoters(members []mdb.Member, configByID map[int]mdb.MemberConfi
 			healthy++
 		}
 	}
-	return total, healthy
+	return total, healthy, nil
 }
 
-func eligibleDrainSecondaries(
-	members []mdb.Member,
-	podsByMemberID map[int]*corev1.Pod,
-	configByMemberID map[int]mdb.MemberConfig,
-	threshold time.Duration,
-) []*mdb.Member {
+func eligibleDrainSecondaries(members []mdb.Member, podsByMemberID map[int]*corev1.Pod, threshold time.Duration) []*mdb.Member {
 	secondaries := make([]*mdb.Member, 0, len(members))
 	for i := range members {
 		member := &members[i]
 
-		if member.State != mdb.StateSecondary || !configByMemberID[member.ID].VotingEligible {
+		if member.State != mdb.StateSecondary {
 			continue
 		}
 
@@ -291,12 +296,35 @@ func eligibleDrainSecondaries(
 	return secondaries
 }
 
-func validateSurvivingMembers(members []mdb.Member, configByID map[int]mdb.MemberConfig, candidateID int, threshold time.Duration) error {
+func filterVotingEligibleSecondaries(secondaries []*mdb.Member, config *mdb.ReplicaSetConfig) ([]*mdb.Member, error) {
+	votingSecondaries := make([]*mdb.Member, 0, len(secondaries))
+	for _, member := range secondaries {
+		configMember, ok := configMemberForID(config, member.ID)
+		if !ok {
+			return nil, fmt.Errorf("replica set configuration is missing member ID %d", member.ID)
+		}
+		if configMember.Config.VotingEligible {
+			votingSecondaries = append(votingSecondaries, member)
+		}
+	}
+	return votingSecondaries, nil
+}
+
+func validateSurvivingMembers(members []mdb.Member, config *mdb.ReplicaSetConfig, candidateID int, threshold time.Duration) error {
 	for i := range members {
 		member := &members[i]
-		if member.ID == candidateID || configByID[member.ID].ArbiterOnly {
+		if member.ID == candidateID {
 			continue
 		}
+
+		configMember, ok := configMemberForID(config, member.ID)
+		if !ok {
+			return fmt.Errorf("replica set configuration is missing member ID %d", member.ID)
+		}
+		if configMember.Config.ArbiterOnly {
+			continue
+		}
+
 		if member.State != mdb.StatePrimary && member.State != mdb.StateSecondary {
 			return fmt.Errorf("surviving data-bearing member %q is not healthy (state %s)", member.Host, member.State)
 		}
@@ -305,6 +333,61 @@ func validateSurvivingMembers(members []mdb.Member, configByID map[int]mdb.Membe
 		}
 	}
 	return nil
+}
+
+func validateTopologyConfigMembers(topology *mdb.Topology, config *mdb.ReplicaSetConfig) error {
+	if topology == nil {
+		return errors.New("received nil topology")
+	}
+	if config == nil {
+		return errors.New("received nil config")
+	}
+	if len(topology.Members) == 0 {
+		return errors.New("replica set topology member list empty")
+	}
+	if len(topology.Members) != len(config.Members) {
+		return errors.New("replica set topology and configuration member lists do not match")
+	}
+
+	for i, member := range topology.Members {
+		for j := range i {
+			if topology.Members[j].ID == member.ID {
+				return fmt.Errorf("replica set topology contains duplicate member ID %d", member.ID)
+			}
+		}
+	}
+	for i, member := range config.Members {
+		for j := range i {
+			if config.Members[j].ID == member.ID {
+				return fmt.Errorf("replica set configuration contains duplicate member ID %d", member.ID)
+			}
+		}
+		if _, ok := topologyMemberForID(topology.Members, member.ID); !ok {
+			return fmt.Errorf("replica set topology is missing member ID %d", member.ID)
+		}
+	}
+	return nil
+}
+
+func configMemberForID(config *mdb.ReplicaSetConfig, memberID int) (mdb.ReplicaSetConfigMember, bool) {
+	if config == nil {
+		return mdb.ReplicaSetConfigMember{}, false
+	}
+	for i := range config.Members {
+		if config.Members[i].ID == memberID {
+			return config.Members[i], true
+		}
+	}
+	return mdb.ReplicaSetConfigMember{}, false
+}
+
+func topologyMemberForID(members []mdb.Member, memberID int) (mdb.Member, bool) {
+	for i := range members {
+		if members[i].ID == memberID {
+			return members[i], true
+		}
+	}
+	return mdb.Member{}, false
 }
 
 func (r *MongoDBReconciler) markPodDraining(ctx context.Context, pod *corev1.Pod) error {
