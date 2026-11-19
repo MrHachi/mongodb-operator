@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -21,8 +21,9 @@ import (
 type InstanceManager struct {
 	mu                          sync.RWMutex
 	client                      *mongodb.Client
-	clientIsDirect              bool
+	clientIsLocalhost           bool
 	instanceManagerPasswordFile string
+	logger                      *slog.Logger
 
 	authenticator                   *auth.Authenticator
 	rsName, hostname                string
@@ -32,11 +33,22 @@ type InstanceManager struct {
 	operatorServiceAccountName      string
 }
 
-func NewInstanceManager(client *mongodb.Client, authenticator *auth.Authenticator, instanceManagerPasswordFile, rsName, hostname, serviceName, namespace, operatorServiceAccountNamespace, operatorServiceAccountName string) *InstanceManager {
+func NewInstanceManager(
+	client *mongodb.Client,
+	authenticator *auth.Authenticator,
+	logger *slog.Logger,
+	instanceManagerPasswordFile, rsName, hostname,
+	serviceName, namespace,
+	operatorServiceAccountNamespace, operatorServiceAccountName string,
+) *InstanceManager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &InstanceManager{
 		client:                      client,
-		clientIsDirect:              true,
+		clientIsLocalhost:           true,
 		instanceManagerPasswordFile: instanceManagerPasswordFile,
+		logger:                      logger,
 		authenticator:               authenticator,
 		rsName:                      rsName,
 		hostname: fmt.Sprintf(
@@ -69,14 +81,25 @@ func (m *InstanceManager) RunPromotionLoop(ctx context.Context) {
 
 func (m *InstanceManager) promoteClient(ctx context.Context) {
 	m.mu.RLock()
-	if !m.clientIsDirect {
+	if !m.clientIsLocalhost {
 		m.mu.RUnlock()
 		return
 	}
 	directClient := m.client
 	m.mu.RUnlock()
+	if directClient == nil {
+		m.logger.Warn(
+			"Cannot promote MongoDB client because no direct client is configured",
+			"replica_set", m.rsName, "hostname", m.hostname,
+		)
+		return
+	}
 	password, err := m.readInstanceManagerPassword()
 	if err != nil {
+		m.logger.Warn(
+			"Could not read instance-manager credentials for MongoDB client promotion",
+			"replica_set", m.rsName, "hostname", m.hostname, "error", err,
+		)
 		return
 	}
 
@@ -87,25 +110,42 @@ func (m *InstanceManager) promoteClient(ctx context.Context) {
 		"admin",
 	)
 	if err != nil {
+		m.logger.Warn(
+			"Could not authenticate MongoDB client with instance-manager credentials",
+			"replica_set", m.rsName, "hostname", m.hostname, "error", err,
+		)
 		return
 	}
 
 	m.mu.Lock()
-	if !m.clientIsDirect {
+	if !m.clientIsLocalhost {
 		m.mu.Unlock()
 		_ = authenticatedClient.Close(context.Background())
 		return
 	}
 	m.client = authenticatedClient
-	m.clientIsDirect = false
+	m.clientIsLocalhost = false
 	m.mu.Unlock()
 
-	_ = directClient.Close(context.Background())
+	if err := directClient.Close(context.Background()); err != nil {
+		m.logger.Warn(
+			"Could not close direct MongoDB client after promotion",
+			"replica_set", m.rsName, "hostname", m.hostname, "error", err,
+		)
+	}
+	m.logger.Info("Promoted MongoDB client to instance-manager credentials", "replica_set", m.rsName, "hostname", m.hostname)
 }
 
-func (m *InstanceManager) acquireClient() (*mongodb.Client, func()) {
+func (m *InstanceManager) acquireClient() (*mongodb.Client, string, func()) {
 	m.mu.RLock()
-	return m.client, m.mu.RUnlock
+	mode := "authenticated"
+	if m.clientIsLocalhost {
+		mode = "direct"
+	}
+	if m.client == nil {
+		mode = "unavailable"
+	}
+	return m.client, mode, m.mu.RUnlock
 }
 
 func (m *InstanceManager) readInstanceManagerPassword() (string, error) {
@@ -162,10 +202,22 @@ func (m *InstanceManager) HandleLivez(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (m *InstanceManager) HandleReadyz(w http.ResponseWriter, r *http.Request) {
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
-	if client == nil || client.Ping(r.Context()) != nil {
+	if client == nil {
+		m.logger.Warn(
+			"MongoDB readiness check failed because no client is available",
+			"mongo_client_mode", clientMode,
+		)
+		http.Error(w, "MongoDB is not ready", http.StatusServiceUnavailable)
+		return
+	}
+	if err := client.Ping(r.Context()); err != nil {
+		m.logger.Warn(
+			"MongoDB readiness check failed",
+			"mongo_client_mode", clientMode, "error", err,
+		)
 		http.Error(w, "MongoDB is not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -173,11 +225,15 @@ func (m *InstanceManager) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request) {
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	err := client.InitiateReplicaSet(r.Context(), m.rsName, m.hostname)
 	if err != nil {
+		m.logger.Error(
+			"Could not initiate MongoDB replica set",
+			"replica_set", m.rsName, "mongo_client_mode", clientMode, "error", err,
+		)
 		if writeMongoError(w, err) {
 			return
 		}
@@ -189,6 +245,7 @@ func (m *InstanceManager) HandleInitiate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	m.logger.Info("Initiated MongoDB replica set", "replica_set", m.rsName)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -200,18 +257,27 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	adminClient, err := client.NewAuthenticatedClient(r.Context(), req.Username, req.Password, "admin")
 	if err == nil {
 		_ = adminClient.Close(context.Background())
+		m.logger.Info("Validated existing MongoDB admin credentials", "mongo_client_mode", clientMode)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	m.logger.Info(
+		"Could not authenticate existing MongoDB admin user; attempting creation",
+		"mongo_client_mode", clientMode, "error", err,
+	)
 
 	err = client.CreateAdminUser(r.Context(), req.Username, req.Password)
 	if err != nil {
+		m.logger.Error(
+			"Could not create MongoDB admin user",
+			"mongo_client_mode", clientMode, "error", err,
+		)
 		if writeMongoError(w, err) {
 			return
 		}
@@ -223,6 +289,7 @@ func (m *InstanceManager) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	m.logger.Info("Created MongoDB admin user", "mongo_client_mode", clientMode)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -234,10 +301,14 @@ func (m *InstanceManager) HandleInstanceManagerUser(w http.ResponseWriter, r *ht
 		return
 	}
 
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 	adminClient, err := client.NewAuthenticatedClient(r.Context(), req.Username, req.Password, "admin")
 	if err != nil {
+		m.logger.Warn(
+			"Could not authenticate admin credentials while provisioning instance-manager user",
+			"mongo_client_mode", clientMode, "error", err,
+		)
 		if errors.Is(err, mongodb.ErrAuthenticationFailed) {
 			http.Error(w, "Admin authentication failed", http.StatusUnauthorized)
 			return
@@ -252,31 +323,42 @@ func (m *InstanceManager) HandleInstanceManagerUser(w http.ResponseWriter, r *ht
 
 	instanceManagerPassword, err := m.readInstanceManagerPassword()
 	if err != nil {
+		m.logger.Error("Could not read instance-manager credentials", "error", err)
 		http.Error(w, "Could not read instance-manager credentials", http.StatusInternalServerError)
 		return
 	}
 	if err := adminClient.EnsureInstanceManagerUser(r.Context(), instanceManagerPassword); err != nil {
+		m.logger.Error("Could not ensure instance-manager MongoDB user", "error", err)
 		if writeMongoError(w, err) {
 			return
 		}
 		http.Error(w, "Could not create or update instance-manager user", http.StatusInternalServerError)
 		return
 	}
+	m.logger.Info("Ensured instance-manager MongoDB user")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Request) {
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	topology, err := client.GetTopology(r.Context())
 	if err != nil {
+		m.logger.Error(
+			"Could not get MongoDB topology",
+			"mongo_client_mode", clientMode, "error", err,
+		)
 		if !writeMongoError(w, err) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
 
+	m.logger.Info(
+		"Retrieved MongoDB topology",
+		"mongo_client_mode", clientMode, "config_version", topology.ConfigVersion, "member_count", len(topology.Members),
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(topology); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -285,17 +367,24 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 }
 
 func (m *InstanceManager) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	config, err := client.GetConfig(r.Context())
 	if err != nil {
+		m.logger.Error("Could not get MongoDB replica set configuration",
+			"mongo_client_mode", clientMode, "error", err,
+		)
 		if !writeMongoError(w, err) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
 
+	m.logger.Info(
+		"Retrieved MongoDB replica set configuration",
+		"mongo_client_mode", clientMode, "version", config.Version, "member_count", len(config.Members),
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(config); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -309,15 +398,23 @@ func (m *InstanceManager) HandleRemoveMember(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	if err := client.RemoveMember(r.Context(), m.memberHost(podName)); err != nil {
+		m.logger.Error(
+			"Could not remove MongoDB replica-set member",
+			"pod_name", podName, "mongo_client_mode", clientMode, "error", err,
+		)
 		if !writeMongoError(w, err) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
+	m.logger.Info(
+		"Removed MongoDB replica-set member",
+		"pod_name", podName, "mongo_client_mode", clientMode,
+	)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -328,15 +425,23 @@ func (m *InstanceManager) HandleAddMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client, release := m.acquireClient()
+	client, clientMode, release := m.acquireClient()
 	defer release()
 
 	if err := client.AddMember(r.Context(), m.memberHost(podName)); err != nil {
+		m.logger.Error(
+			"Could not add MongoDB replica-set member",
+			"pod_name", podName, "mongo_client_mode", clientMode, "error", err,
+		)
 		if !writeMongoError(w, err) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
+	m.logger.Info(
+		"Added MongoDB replica-set member",
+		"pod_name", podName, "mongo_client_mode", clientMode,
+	)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -365,12 +470,15 @@ func writeMongoError(w http.ResponseWriter, err error) bool {
 }
 
 func (m *InstanceManager) HandleTransferLeadership(w http.ResponseWriter, _ *http.Request) {
-	log.Printf("WARNING: Leadership transfer endpoint is waiting for implementation; request is a no-op for node %s", m.hostname)
+	m.logger.Warn("Leadership transfer endpoint is not implemented", "hostname", m.hostname)
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (m *InstanceManager) HandleGetLeadership(w http.ResponseWriter, _ *http.Request) {
-	log.Printf("WARNING: Leadership state endpoint is waiting for implementation; returning placeholder leader %q", managerapi.NoLeader)
+	m.logger.Warn(
+		"Leadership state endpoint is not implemented; returning placeholder leader",
+		"leader", managerapi.NoLeader,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(managerapi.LeadershipStatus{Leader: managerapi.NoLeader}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

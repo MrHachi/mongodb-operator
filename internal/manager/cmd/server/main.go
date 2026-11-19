@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/auth"
 	"github.com/MrHachi/mongodb-operator/internal/manager/pkg/config"
@@ -13,29 +14,33 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 	cfg := config.LoadConfig()
 
 	// Use in-cluster config for running in Pod
 	k8sCfg, err := rest.InClusterConfig()
 	if err != nil {
-		log.Println("Failed to load in-cluster config, using default kubeconfig")
+		logger.Warn("Could not load in-cluster Kubernetes configuration", "error", err)
 	}
 
 	dbClient, err := mongodb.NewClient(ctx, cfg.MongoURI)
 	if err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
+		logger.Error("Could not connect to MongoDB", "error", err)
+		os.Exit(1)
 	}
 	defer dbClient.Close(ctx)
 
 	authenticator, err := auth.NewAuthenticator(k8sCfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize authenticator: %v", err)
+		logger.Error("Could not initialize authenticator", "error", err)
+		os.Exit(1)
 	}
 
 	m := mgr.NewInstanceManager(
 		dbClient,
 		authenticator,
+		logger,
 		cfg.InstanceManagerPasswordFile,
 		cfg.RSName,
 		cfg.Hostname,
@@ -48,8 +53,9 @@ func main() {
 	router := m.Serve()
 
 	port := "8080"
-	log.Printf("Starting instance-manager on port %s", port)
+	logger.Info("Starting instance-manager API server", "port", port)
 	if err := http.ListenAndServe(":"+port, router); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		logger.Error("Instance-manager API server failed", "error", err)
+		os.Exit(1)
 	}
 }
