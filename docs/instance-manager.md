@@ -67,7 +67,6 @@ Retrieves the current MongoDB replica set status, including member states, appli
 - **Response Body**:
     ```json
     {
-        "config_version": 3,
         "optimes": {
             "last_committed": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},
             "last_committed_wall_time": "2024-03-09T16:00:00Z"
@@ -78,6 +77,7 @@ Retrieves the current MongoDB replica set status, including member states, appli
             "host": "mongodb-0.example.com:27017",
             "state": "PRIMARY",
             "state_code": 1,
+            "config_version": 3,
             "optimes": {
                 "applied": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},
                 "durable": {"timestamp": {"T": 1710000000, "I": 1}, "term": 2},

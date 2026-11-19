@@ -152,21 +152,54 @@ func (r *MongoDBReconciler) discoverClusterTopology(ctx context.Context, mongodb
 		return nil, nil, fmt.Errorf("get configuration from primary Pod %s: %w", discovery.Primary.Name, err)
 	}
 
-	if _, err := memberConfigsByID(topology, config); err != nil {
-		return nil, nil, fmt.Errorf("primary topology and configuration do not match: %w", err)
+	if err := validateTopologyAndConfig(topology, config); err != nil {
+		return nil, nil, fmt.Errorf("validate topology and config: %w", err)
 	}
 	return topology, config, nil
 }
 
+func validateTopologyAndConfig(topology *mdb.Topology, config *mdb.ReplicaSetConfig) error {
+	if topology == nil {
+		return errors.New("received nil topology")
+	}
+	if config == nil {
+		return errors.New("received nil config")
+	}
+
+	if config.Version <= 0 {
+		return errors.New("replica set configuration version is invalid")
+	}
+	if len(topology.Members) == 0 {
+		return errors.New("replica set topology member list empty")
+	}
+
+	primaryCount := 0
+	var primaryConfigVersion int32
+	for _, member := range topology.Members {
+		if member.State == mdb.StatePrimary {
+			primaryCount++
+			primaryConfigVersion = member.ConfigVersion
+		}
+	}
+	if primaryCount != 1 {
+		return fmt.Errorf("replica set topology must report exactly one PRIMARY; found %d", primaryCount)
+	}
+	if primaryConfigVersion <= 0 {
+		return errors.New("PRIMARY replica set configuration version is invalid")
+	}
+	if config.Version != primaryConfigVersion {
+		return fmt.Errorf("replica set PRIMARY configuration version %d does not match configuration version %d", primaryConfigVersion, config.Version)
+	}
+
+	if len(topology.Members) != len(config.Members) {
+		return errors.New("replica set topology and configuration member lists do not match")
+	}
+	return nil
+}
+
 func memberConfigsByID(topology *mdb.Topology, config *mdb.ReplicaSetConfig) (map[int]mdb.MemberConfig, error) {
-	if topology == nil || config == nil || topology.ConfigVersion <= 0 || config.Version <= 0 {
-		return nil, errors.New("replica set topology and/or configuration invalid")
-	}
-	if config.Version != topology.ConfigVersion {
-		return nil, errors.New("replica set topology and configuration versions do not match")
-	}
-	if len(topology.Members) == 0 || len(topology.Members) != len(config.Members) {
-		return nil, errors.New("replica set topology and configuration member lists do not match")
+	if err := validateTopologyAndConfig(topology, config); err != nil {
+		return nil, fmt.Errorf("validate topology and config: %w", err)
 	}
 
 	configs := make(map[int]mdb.MemberConfig, len(config.Members))

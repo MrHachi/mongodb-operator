@@ -214,7 +214,7 @@ func verifyScaleInSafety(topology *mdb.Topology, config *mdb.ReplicaSetConfig, c
 }
 
 func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev1.Pod, error) {
-	if topology == nil || topology.ConfigVersion <= 0 || len(topology.Members) == 0 {
+	if topology == nil || len(topology.Members) == 0 {
 		return nil, errors.New("replica set configuration is unavailable or unstable")
 	}
 
@@ -229,6 +229,9 @@ func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev
 
 		if member.State == mdb.StatePrimary {
 			primaryCount++
+			if member.ConfigVersion <= 0 {
+				return nil, errors.New("PRIMARY replica set configuration version is unavailable")
+			}
 			if member.Optimes.AppliedAt.IsZero() {
 				return nil, fmt.Errorf("%s applied optime is unavailable", mdb.StatePrimary)
 			}

@@ -357,7 +357,7 @@ func (m *InstanceManager) HandleGetTopology(w http.ResponseWriter, r *http.Reque
 
 	m.logger.Info(
 		"Retrieved MongoDB topology",
-		"mongo_client_mode", clientMode, "config_version", topology.ConfigVersion, "member_count", len(topology.Members),
+		"mongo_client_mode", clientMode, "member_count", len(topology.Members),
 	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(topology); err != nil {
