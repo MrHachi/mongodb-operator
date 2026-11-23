@@ -210,8 +210,14 @@ func verifyScaleInSafety(topology *mdb.Topology, config *mdb.ReplicaSetConfig, c
 	if votingMembers == 0 {
 		return errors.New("replica set voting configuration is unavailable")
 	}
-	if healthyVotingMembers-1 < votingMembers/2+1 {
-		return errors.New("removing a secondary would not preserve the current voting quorum")
+	if currentQuorum := votingMembers/2 + 1; healthyVotingMembers < currentQuorum {
+		return fmt.Errorf("current replica set has %d healthy voters, but quorum requires %d", healthyVotingMembers, currentQuorum)
+	}
+	if newQuorum, newHealthyVotingMembers := (votingMembers-1)/2+1, healthyVotingMembers-1; newHealthyVotingMembers < newQuorum {
+		return fmt.Errorf(
+			"after removing member %d, the replica set would have %d healthy voters, but quorum would require %d",
+			candidateID, newHealthyVotingMembers, newQuorum,
+		)
 	}
 
 	if err := validateSurvivingMembers(topology.Members, config, candidateID, threshold); err != nil {
