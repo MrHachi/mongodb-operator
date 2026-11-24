@@ -3,4 +3,5 @@ kind: MongoDB
 metadata:
   name: {{ .Name }}
   namespace: {{ .Namespace }}
-spec: {}
+spec:{{ if .Replicas }}
+  replicas: {{ .Replicas }}{{ else }} {}{{ end }}

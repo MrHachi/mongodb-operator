@@ -53,6 +53,10 @@ func createMongoDBTestNamespace(testNamespace string) {
 }
 
 func createMongoDBResource(testNamespace, clusterName string) {
+	createMongoDBResourceWithReplicas(testNamespace, clusterName, 0)
+}
+
+func createMongoDBResourceWithReplicas(testNamespace, clusterName string, replicas int32) {
 	By("applying MongoDB resource " + clusterName)
 
 	_, sourceFile, _, ok := runtime.Caller(0)
@@ -62,7 +66,10 @@ func createMongoDBResource(testNamespace, clusterName string) {
 	Expect(err).NotTo(HaveOccurred())
 
 	var manifest bytes.Buffer
-	Expect(manifestTemplate.Execute(&manifest, struct{ Name, Namespace string }{clusterName, testNamespace})).To(Succeed())
+	Expect(manifestTemplate.Execute(&manifest, struct {
+		Name, Namespace string
+		Replicas        int32
+	}{clusterName, testNamespace, replicas})).To(Succeed())
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = &manifest
