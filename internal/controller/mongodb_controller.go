@@ -18,10 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -29,15 +25,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,19 +41,12 @@ import (
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	controllerconfig "github.com/MrHachi/mongodb-operator/internal/controller/config"
 	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
+	"github.com/MrHachi/mongodb-operator/internal/controller/reconciliation"
+	"github.com/MrHachi/mongodb-operator/internal/controller/resources"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
 )
 
-const (
-	adminUsernameKey             = "username"
-	adminPasswordKey             = "password"
-	keyfileVolumeName            = "keyfile"
-	instanceManagerPasswordKey   = "password"
-	instanceManagerPasswordSize  = 1024
-	instanceManagerSecretVolume  = "instance-manager-credentials"
-	instanceManagerSecretMount   = "/etc/mongodb-operator/credentials"
-	instanceManagerRBACFinalizer = "db.mrhachi.dev/instance-manager-rbac"
-)
+const instanceManagerRBACFinalizer = "db.mrhachi.dev/instance-manager-rbac"
 
 var (
 	errObservedGenerationChanged = errors.New("MongoDB generation changed during reconciliation")
@@ -108,8 +92,8 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			return
 		}
 
-		if blocked, ok := errors.AsType[*ReconciliationError](reconcileErr); ok {
-			if err := r.setReconciliationErrorStatus(ctx, mongodb, blocked); err != nil {
+		if blocked, ok := errors.AsType[*reconciliation.BlockingError](reconcileErr); ok {
+			if err := r.blockReconciliation(ctx, mongodb, blocked); err != nil {
 				reconcileErr = fmt.Errorf("record reconciliation error status: %w", err)
 				return
 			}
@@ -126,7 +110,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	}
 	if mongodb.DeletionTimestamp != nil {
 		if containsFinalizer(mongodb.Finalizers, instanceManagerRBACFinalizer) {
-			if err := r.deleteInstanceManagerBinding(ctx, mongodb); err != nil {
+			if err := r.kubernetesResources().DeleteInstanceManagerBinding(ctx, mongodb); err != nil {
 				return ctrl.Result{}, err
 			}
 			before := mongodb.DeepCopy()
@@ -197,64 +181,6 @@ func removeFinalizer(finalizers []string, finalizer string) []string {
 		}
 	}
 	return remaining
-}
-
-func instanceManagerBindingName(mongodb *dbv1beta1.MongoDB) string {
-	sum := sha256.Sum256([]byte(mongodb.Namespace + "/" + mongodb.Name))
-	return "mongodb-instance-manager-" + hex.EncodeToString(sum[:12])
-}
-
-func (r *MongoDBReconciler) ensureInstanceManagerBinding(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	if r.KubeClient == nil {
-		return fmt.Errorf("kubernetes client is not configured")
-	}
-	if r.Config == nil || r.Config.InstanceManagerRoleName == "" {
-		return fmt.Errorf("instance-manager auth ClusterRole name is not configured")
-	}
-
-	bindings := r.KubeClient.RbacV1().ClusterRoleBindings()
-	name := instanceManagerBindingName(mongodb)
-	desired := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "mongodb-operator",
-				"db.mrhachi.dev/namespace":     mongodb.Namespace,
-			},
-		},
-		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: r.Config.InstanceManagerRoleName},
-		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "default", Namespace: mongodb.Namespace}},
-	}
-	existing, err := bindings.Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		if _, err := bindings.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create instance-manager ClusterRoleBinding: %w", err)
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get instance-manager ClusterRoleBinding: %w", err)
-	}
-	if existing.RoleRef != desired.RoleRef {
-		return fmt.Errorf("instance-manager ClusterRoleBinding %q references unexpected role %q", name, existing.RoleRef.Name)
-	}
-	if !equality.Semantic.DeepEqual(existing.Subjects, desired.Subjects) {
-		existing.Subjects = desired.Subjects
-		if _, err := bindings.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update instance-manager ClusterRoleBinding subjects: %w", err)
-		}
-	}
-	return nil
-}
-
-func (r *MongoDBReconciler) deleteInstanceManagerBinding(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	if r.KubeClient == nil {
-		return fmt.Errorf("kubernetes client is not configured")
-	}
-	if err := r.KubeClient.RbacV1().ClusterRoleBindings().Delete(ctx, instanceManagerBindingName(mongodb), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete instance-manager ClusterRoleBinding: %w", err)
-	}
-	return nil
 }
 
 func (r *MongoDBReconciler) transitionProgressing(ctx context.Context, mongodb *dbv1beta1.MongoDB, phase dbv1beta1.MongoDBPhase, reason dbv1beta1.ProgressReason) error {
@@ -331,562 +257,8 @@ func (r *MongoDBReconciler) discoveryManagerForPod(pod *corev1.Pod) discovery.Ma
 	return r.managerClientForPod(pod)
 }
 
-func (r *MongoDBReconciler) loadAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
-	secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, &ReconciliationError{
-				Reason:  dbv1beta1.ReasonCredentialsMissing,
-				Message: fmt.Sprintf("Admin credentials Secret %s/%s is missing; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-		return nil, fmt.Errorf("get admin credentials secret: %w", err)
-	}
-
-	if len(secret.Data[adminUsernameKey]) == 0 || len(secret.Data[adminPasswordKey]) == 0 {
-		return nil, &ReconciliationError{
-			Reason:  dbv1beta1.ReasonCredentialsIncomplete,
-			Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
-			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-		}
-	}
-	return secret, nil
-}
-
-func (r *MongoDBReconciler) ensureAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {
-	secretName := fmt.Sprintf("%s-admin-credentials", mongodb.Name)
-	secret := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, secret)
-	if err == nil {
-		if len(secret.Data[adminUsernameKey]) == 0 || len(secret.Data[adminPasswordKey]) == 0 {
-			return nil, &ReconciliationError{
-				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
-				Message: fmt.Sprintf("Admin credentials Secret %s/%s must contain non-empty %q and %q entries; restore the cluster's credentials to resume initialization", mongodb.Namespace, secretName, adminUsernameKey, adminPasswordKey),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-		return secret, nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("get admin credentials secret: %w", err)
-	}
-
-	password := make([]byte, 32)
-	if _, err := rand.Read(password); err != nil {
-		return nil, fmt.Errorf("generate admin password: %w", err)
-	}
-	secret = &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: mongodb.Namespace, Labels: r.labels(mongodb)},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{adminUsernameKey: []byte("admin"), adminPasswordKey: []byte(hex.EncodeToString(password))},
-	}
-	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set owner reference on admin credentials secret: %w", err)
-	}
-	if err := r.Create(ctx, secret); err != nil {
-		return nil, fmt.Errorf("create admin credentials secret: %w", err)
-	}
-	return secret, nil
-}
-
-func (r *MongoDBReconciler) labels(mongodb *dbv1beta1.MongoDB, custom ...string) map[string]string {
-	if mongodb == nil {
-		return map[string]string{}
-	}
-
-	labels := make(map[string]string, 2+(len(custom)/2))
-	labels["app.kubernetes.io/name"] = mongodb.Name
-	labels["db.mrhachi.dev/mongodb"] = mongodb.Name
-
-	for i := 0; i+1 < len(custom); i += 2 {
-		labels[custom[i]] = custom[i+1]
-	}
-
-	return labels
-}
-
-// ensureResource creates desired when it is absent, or reconciles the
-// operator-owned fields of the existing object and patches only when needed.
-// reconcile must preserve fields not owned by this controller.
-func ensureResource[T client.Object](ctx context.Context, c client.Client, desired T, reconcile func(existing, desired T) error) error {
-	key := client.ObjectKeyFromObject(desired)
-	existing := desired.DeepCopyObject().(T)
-	if err := c.Get(ctx, key, existing); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get %T %s: %w", desired, key, err)
-		}
-		if err := c.Create(ctx, desired); err != nil {
-			return fmt.Errorf("create %T %s: %w", desired, key, err)
-		}
-		return nil
-	}
-
-	before := existing.DeepCopyObject().(T)
-
-	// Check ownership
-	expectedOwner, actualOwner := metav1.GetControllerOf(desired), metav1.GetControllerOf(existing)
-	if expectedOwner == nil {
-		return fmt.Errorf("check ownership of %T %s: desired object has no controller owner reference", existing, key)
-	}
-	if actualOwner == nil {
-		return &ReconciliationError{
-			Reason:  dbv1beta1.ReasonResourceOwnershipConflict,
-			Message: fmt.Sprintf("existing %T %s has no controller owner reference; refusing adoption", existing, key),
-			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-		}
-	}
-	// Fail if we can't determine that we own the resource
-	if actualOwner.APIVersion != expectedOwner.APIVersion ||
-		actualOwner.Kind != expectedOwner.Kind ||
-		actualOwner.Name != expectedOwner.Name ||
-		actualOwner.UID != expectedOwner.UID {
-		return &ReconciliationError{
-			Reason: dbv1beta1.ReasonResourceOwnershipConflict,
-			Message: fmt.Sprintf(
-				"existing %T %s is controlled by %s %q, expected %s %q; refusing to reconcile it",
-				existing, key, actualOwner.Kind, actualOwner.Name, expectedOwner.Kind, expectedOwner.Name,
-			),
-			Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-		}
-	}
-
-	if err := reconcile(existing, desired); err != nil {
-		return fmt.Errorf("reconcile %T: %w", existing, err)
-	}
-	if equality.Semantic.DeepEqual(before, existing) {
-		return nil
-	}
-
-	if err := c.Patch(ctx, existing, client.MergeFrom(before)); err != nil {
-		return fmt.Errorf("patch %T %s: %w", existing, key, err)
-	}
-	return nil
-}
-
-func (r *MongoDBReconciler) reconcileOwnedMetadata(existing, desired client.Object) error {
-	// This is currently reflected in memory only; we apply this via the Kubernetes API later when the reconciler calls client.Patch() as a part of ensureResource()
-	existing.SetLabels(desired.GetLabels())
-
-	return nil
-}
-
-func (r *MongoDBReconciler) ensureKeyfileSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	secretName := fmt.Sprintf("%s-keyfile", mongodb.Name)
-	key, err := r.generateKeyfile()
-	if err != nil {
-		return fmt.Errorf("generate keyfile: %w", err)
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: mongodb.Namespace,
-			Labels:    r.labels(mongodb),
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"mongodb-keyfile": key,
-		},
-	}
-
-	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on keyfile secret: %w", err)
-	}
-	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
-		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
-			return err
-		}
-		if !validKeyfile(existing.Data["mongodb-keyfile"]) {
-			if existing.Data == nil {
-				existing.Data = make(map[string][]byte)
-			}
-			existing.Data["mongodb-keyfile"] = key
-		}
-		if existing.Type == "" {
-			existing.Type = desired.Type
-		}
-		return nil
-	})
-}
-
-func (r *MongoDBReconciler) ensureInstanceManagerCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	secretName := fmt.Sprintf("%s-instance-manager-credentials", mongodb.Name)
-
-	existing := &corev1.Secret{}
-	var password []byte
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: mongodb.Namespace}, existing); err == nil {
-		password = existing.Data[instanceManagerPasswordKey]
-		if !validInstanceManagerPassword(password) {
-			return &ReconciliationError{
-				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
-				Message: fmt.Sprintf("Instance-manager credentials Secret %s/%s must contain a %d-character URL-safe password; restore the credential to resume reconciliation", mongodb.Namespace, secretName, instanceManagerPasswordSize),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get instance-manager credentials Secret: %w", err)
-	} else {
-		randomBytes := make([]byte, 768)
-		if _, err := rand.Read(randomBytes); err != nil {
-			return fmt.Errorf("generate instance-manager password: %w", err)
-		}
-		password = []byte(base64.RawURLEncoding.EncodeToString(randomBytes))
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: mongodb.Namespace,
-			Labels:    r.labels(mongodb, "app.kubernetes.io/component", "instance-manager"),
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			instanceManagerPasswordKey: password,
-		},
-	}
-	if err := ctrl.SetControllerReference(mongodb, secret, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on instance-manager credentials Secret: %w", err)
-	}
-	return ensureResource(ctx, r.Client, secret, func(existing, desired *corev1.Secret) error {
-		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
-			return err
-		}
-		existing.Type = desired.Type
-
-		if !validInstanceManagerPassword(existing.Data[instanceManagerPasswordKey]) {
-			return &ReconciliationError{
-				Reason:  dbv1beta1.ReasonCredentialsIncomplete,
-				Message: fmt.Sprintf("Instance-manager credentials Secret %s/%s must contain a %d-character URL-safe password; restore the credential to resume reconciliation", mongodb.Namespace, secretName, instanceManagerPasswordSize),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-		return nil
-	})
-}
-
-func validInstanceManagerPassword(password []byte) bool {
-	if len(password) != instanceManagerPasswordSize {
-		return false
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(string(password))
-	return err == nil && len(decoded) == 768
-}
-
-func (r *MongoDBReconciler) generateKeyfile() ([]byte, error) {
-	// MongoDB keyfiles accept base64 characters and must be no longer than
-	// 1024 characters. 756 random bytes encode to 1008 base64 characters.
-	key := make([]byte, 756)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(key)))
-	base64.StdEncoding.Encode(encoded, key)
-	return encoded, nil
-}
-
-func validKeyfile(key []byte) bool {
-	if len(key) < 6 || len(key) > 1024 {
-		return false
-	}
-	_, err := base64.StdEncoding.DecodeString(string(key))
-	return err == nil
-}
-
-func (r *MongoDBReconciler) ensurePVC(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) error {
-	log := logf.FromContext(ctx)
-	pvcName := fmt.Sprintf("%s-r-%s-data", mongodb.Name, id)
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pvcName,
-			Namespace: mongodb.Namespace,
-			Labels: r.labels(mongodb,
-				"db.mrhachi.dev/role", "replica",
-				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
-
-				// Set to "jettisoned" when instance drained and retained for a period
-				"db.mrhachi.dev/status", pvcStatusInUse,
-			),
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse("20Gi"),
-				},
-			},
-		},
-	}
-
-	log.Info("Creating PVC", "name", pvcName)
-	if err := ctrl.SetControllerReference(mongodb, pvc, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on pvc: %w", err)
-	}
-
-	return ensureResource(ctx, r.Client, pvc, func(existing, desired *corev1.PersistentVolumeClaim) error {
-		return r.reconcileOwnedMetadata(existing, desired)
-	})
-}
-
-func (r *MongoDBReconciler) ensureReplicaPod(ctx context.Context, mongodb *dbv1beta1.MongoDB, id string) (*corev1.Pod, error) {
-	log := logf.FromContext(ctx)
-	podName := fmt.Sprintf("%s-r-%s", mongodb.Name, id)
-	instanceManagerSecretMode := int32(0o440)
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: mongodb.Namespace,
-			Annotations: map[string]string{
-				provisioningPodAnnotation: "true",
-			},
-			Labels: r.labels(mongodb,
-				"db.mrhachi.dev/role", "replica",
-				"db.mrhachi.dev/member", fmt.Sprintf("r-%s", id),
-			),
-		},
-		Spec: corev1.PodSpec{
-			Hostname:      podName,
-			Subdomain:     mongodb.Name,
-			RestartPolicy: corev1.RestartPolicyAlways,
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot: new(true),
-				RunAsUser:    new(int64(999)),
-				RunAsGroup:   new(int64(999)),
-				FSGroup:      new(int64(999)),
-			},
-			InitContainers: []corev1.Container{
-				{
-					Name:  "setup-keyfile",
-					Image: "mongo:latest",
-					Command: []string{
-						"sh",
-						"-c",
-						"cp /etc/secret/mongodb.key /etc/keyfile/mongodb.key && chown 999:999 /etc/keyfile/mongodb.key && chmod 0600 /etc/keyfile/mongodb.key",
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      keyfileVolumeName + "-secret",
-							MountPath: "/etc/secret",
-						},
-						{
-							Name:      keyfileVolumeName,
-							MountPath: "/etc/keyfile",
-						},
-					},
-				},
-			},
-			Containers: []corev1.Container{
-				{
-					Name:  "instance-manager",
-					Image: "ghcr.io/mrhachi/mongodb-instance-manager:v0.1",
-					Env: []corev1.EnvVar{
-						{Name: "MONGODB_RS_NAME", Value: mongodb.Name},
-						{Name: "MONGODB_HOSTNAME", Value: podName},
-						{Name: "MONGODB_SERVICE_NAME", Value: mongodb.Name},
-						{Name: "MONGODB_NAMESPACE", Value: mongodb.Namespace},
-						{Name: "OPERATOR_SERVICE_ACCOUNT_NAMESPACE", Value: r.Config.ServiceAccountNamespace},
-						{Name: "OPERATOR_SERVICE_ACCOUNT_NAME", Value: r.Config.ServiceAccountName},
-						{Name: "INSTANCE_MANAGER_PASSWORD_FILE", Value: instanceManagerSecretMount + "/" + instanceManagerPasswordKey},
-					},
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          "http",
-							ContainerPort: 8080,
-						},
-					},
-					LivenessProbe: &corev1.Probe{
-						ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/livez", Port: intstr.FromString("http"), Scheme: corev1.URISchemeHTTP}},
-						PeriodSeconds: 10, TimeoutSeconds: 2,
-						FailureThreshold: 3, SuccessThreshold: 1,
-					},
-					ReadinessProbe: &corev1.Probe{
-						ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/readyz", Port: intstr.FromString("http"), Scheme: corev1.URISchemeHTTP}},
-						PeriodSeconds: 5, TimeoutSeconds: 2,
-						FailureThreshold: 3, SuccessThreshold: 1,
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      instanceManagerSecretVolume + "-secret",
-							MountPath: instanceManagerSecretMount,
-							ReadOnly:  true,
-						},
-					},
-				},
-				{
-					Name:  "mongodb",
-					Image: "mongo:latest",
-					Args: []string{
-						"--replSet", mongodb.Name,
-						"--clusterAuthMode", "keyFile", "--keyFile", "/etc/keyfile/mongodb.key",
-						"--bind_ip_all",
-					},
-					StartupProbe: &corev1.Probe{
-						ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(27017)}},
-						PeriodSeconds: 10, TimeoutSeconds: 2,
-						FailureThreshold: 30,
-					},
-					LivenessProbe: &corev1.Probe{
-						ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(27017)}},
-						PeriodSeconds: 10, TimeoutSeconds: 2,
-						FailureThreshold: 3,
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "data",
-							MountPath: "/data/db",
-						},
-						{
-							Name:      keyfileVolumeName,
-							MountPath: "/etc/keyfile",
-						},
-					},
-				},
-			},
-			Volumes: []corev1.Volume{
-				{
-					Name: instanceManagerSecretVolume + "-secret",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName:  fmt.Sprintf("%s-instance-manager-credentials", mongodb.Name),
-							Items:       []corev1.KeyToPath{{Key: instanceManagerPasswordKey, Path: instanceManagerPasswordKey}},
-							DefaultMode: &instanceManagerSecretMode,
-						},
-					},
-				},
-				{
-					Name: keyfileVolumeName + "-secret",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName: fmt.Sprintf("%s-keyfile", mongodb.Name),
-							Items:      []corev1.KeyToPath{{Key: "mongodb-keyfile", Path: "mongodb.key"}},
-						},
-					},
-				},
-				{
-					Name: keyfileVolumeName,
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
-				{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: fmt.Sprintf("%s-r-%s-data", mongodb.Name, id),
-						},
-					},
-				},
-			},
-		},
-	}
-
-	log.Info("Creating replica pod", "name", podName)
-	if err := ctrl.SetControllerReference(mongodb, pod, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set owner reference on replica pod: %w", err)
-	}
-
-	existing := &corev1.Pod{}
-	key := client.ObjectKeyFromObject(pod)
-	if err := r.Get(ctx, key, existing); err == nil {
-		needsReplacement := len(existing.Spec.InitContainers) == 0 ||
-			!equality.Semantic.DeepEqual(existing.Spec.InitContainers[0].Command, pod.Spec.InitContainers[0].Command)
-		if !needsReplacement {
-			needsReplacement = true
-			for _, volume := range existing.Spec.Volumes {
-				if volume.Name == keyfileVolumeName+"-secret" && volume.Secret != nil && len(volume.Secret.Items) == 1 &&
-					volume.Secret.Items[0].Key == "mongodb-keyfile" && volume.Secret.Items[0].Path == "mongodb.key" {
-					needsReplacement = false
-					break
-				}
-			}
-		}
-		if needsReplacement {
-			// TODO: Define a safe keyfile rotation strategy before deleting a live member.
-			// See docs/adr/003-safe-keyfile-rotation.md for the open questions around
-			// primary protection, replication health, mixed-key operation, and replacement retries.
-			log.Info("Replica Pod replacement is blocked pending a safe keyfile rotation procedure", "name", podName)
-			return nil, &ReconciliationError{
-				Reason:  dbv1beta1.ReasonKeyfileRotationBlocked,
-				Message: fmt.Sprintf("replica Pod %s needs replacement to update keyfile setup, but no safe replacement procedure is defined; resolve the keyfile setup manually", podName),
-				Affects: []string{dbv1beta1.ConditionProgressing},
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("get replica pod: %w", err)
-	}
-
-	if err := ensureResource(ctx, r.Client, pod, func(existing, desired *corev1.Pod) error {
-		return r.reconcileOwnedMetadata(existing, desired)
-	}); err != nil {
-		return nil, fmt.Errorf("ensure pod: %w", err)
-	}
-
-	pod = &corev1.Pod{}
-	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: mongodb.Namespace}, pod); err != nil {
-		return nil, fmt.Errorf("get replica pod: %w", err)
-	}
-
-	return pod, nil
-}
-
-func (r *MongoDBReconciler) ensureHeadlessService(ctx context.Context, mongodb *dbv1beta1.MongoDB) error {
-	log := logf.FromContext(ctx)
-	serviceName := mongodb.Name
-	log.Info("Creating headless service", "name", serviceName)
-	service := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: mongodb.Namespace,
-			Labels:    r.labels(mongodb),
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP:                corev1.ClusterIPNone,
-			PublishNotReadyAddresses: true,
-			Selector: r.labels(mongodb,
-				"db.mrhachi.dev/role", "replica",
-			),
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "mongodb",
-					Port:       27017,
-					TargetPort: intstr.FromInt32(27017),
-				},
-			},
-		},
-	}
-
-	if err := ctrl.SetControllerReference(mongodb, service, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on headless service: %w", err)
-	}
-	existing := &corev1.Service{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(service), existing); err == nil {
-		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
-			return &ReconciliationError{
-				Reason:  dbv1beta1.ReasonServiceNotHeadless,
-				Message: fmt.Sprintf("Service %s/%s has clusterIP %q; refusing unsafe in-place conversion to headless", existing.Namespace, existing.Name, existing.Spec.ClusterIP),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get existing service before headless reconciliation: %w", err)
-	}
-	return ensureResource(ctx, r.Client, service, func(existing, desired *corev1.Service) error {
-		if existing.Spec.ClusterIP != corev1.ClusterIPNone {
-			return &ReconciliationError{
-				Reason:  dbv1beta1.ReasonServiceNotHeadless,
-				Message: fmt.Sprintf("Service %s/%s has clusterIP %q; refusing unsafe in-place conversion to headless", existing.Namespace, existing.Name, existing.Spec.ClusterIP),
-				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
-			}
-		}
-		if err := r.reconcileOwnedMetadata(existing, desired); err != nil {
-			return err
-		}
-		existing.Spec.Selector = desired.Spec.Selector
-		existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
-		return nil
-	})
+func (r *MongoDBReconciler) kubernetesResources() *resources.KubernetesResources {
+	return resources.NewKubernetesResources(r.Client, r.Scheme, r.KubeClient, r.Config)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -930,4 +302,29 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		})).
 		Named("mongodb").
 		Complete(r)
+}
+
+func (r *MongoDBReconciler) blockReconciliation(ctx context.Context, mongodb *dbv1beta1.MongoDB, reconciliationErr *reconciliation.BlockingError) error {
+	conditions, err := reconciliationErr.Conditions()
+	if err != nil {
+		return fmt.Errorf("build blocking error conditions: %w", err)
+	}
+
+	return r.updateStatus(ctx, mongodb, mongodb.Status.Phase, conditions)
+}
+
+// waitForReconciliation records a condition for a state that may resolve on a
+// later observation, then requeues after the requested delay. It leaves the
+// current phase unchanged, sets Ready=False and Progressing=True using the
+// supplied reason and message, and is used when reconciliation must wait for
+// an external resource or MongoDB state to become available.
+func (r *MongoDBReconciler) waitForReconciliation(ctx context.Context, mongodb *dbv1beta1.MongoDB, reason, message string, requeueAfter time.Duration) (ctrl.Result, error) {
+	if err := r.updateStatus(ctx, mongodb, mongodb.Status.Phase, []metav1.Condition{
+		{Type: dbv1beta1.ConditionReady, Status: metav1.ConditionFalse, Reason: reason, Message: message},
+		{Type: dbv1beta1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: reason, Message: message},
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("record reconciliation wait status: %w", err)
+	}
+	logf.FromContext(ctx).Info("Waiting to continue reconciliation", "name", mongodb.Name, "reason", reason, "message", message)
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }

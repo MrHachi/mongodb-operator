@@ -36,21 +36,11 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
+	"github.com/MrHachi/mongodb-operator/internal/controller/resources"
 	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 )
 
-const (
-	provisioningPodAnnotation    = "db.mrhachi.dev/provisioning" // TODO: move to other file as this is not Progressing phase-specific
-	drainingPodAnnotation        = "db.mrhachi.dev/draining"
-	drainingCheckpointAnnotation = "db.mrhachi.dev/draining-checkpoint"
-
-	pvcStatusLabel            = "db.mrhachi.dev/status"
-	pvcMemberLabel            = "db.mrhachi.dev/member"
-	pvcStatusInUse            = "in-use" // TODO: move to other file as this is not Progressing phase-specific
-	pvcStatusJettisoned       = "jettisoned"
-	pvcJettisonedAtAnnotation = "db.mrhachi.dev/jettisoned-at"
-	pvcDataTimeAnnotation     = "db.mrhachi.dev/data-time"
-)
+const drainingCheckpointAnnotation = "db.mrhachi.dev/draining-checkpoint"
 
 var errMajorityCommitCheckpointUnavailable = errors.New("primary majority-commit checkpoint is unavailable")
 
@@ -62,16 +52,17 @@ type drainCheckpoint struct {
 }
 
 func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
+	kubeResources := r.kubernetesResources()
 	if err := r.transitionProgressing(ctx, mongodb, dbv1beta1.PhaseProgressing, dbv1beta1.ProgressReasonReconcilingMembers); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureInstanceManagerBinding(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
 	}
-	if err := r.ensureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager credentials: %w", err)
 	}
-	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureHeadlessService(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 	}
 
@@ -87,14 +78,14 @@ func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *d
 
 		// A selected drain always takes precedence over a new count comparison. This
 		// lets a later reconcile resume the same target after a controller restart.
-		if _, ok := pods[i].Annotations[drainingPodAnnotation]; ok {
+		if _, ok := pods[i].Annotations[resources.DrainingPodAnnotation]; ok {
 			return r.drainReplicaScaleIn(ctx, mongodb, &pods[i])
 		}
 
 		// A provisioning Pod marks an interrupted scale-out operation. Resume its
 		// readiness and replica-set join before comparing Pod counts, since its
 		// presence may already make observed replicas equal the desired count.
-		if _, ok := pods[i].Annotations[provisioningPodAnnotation]; ok {
+		if _, ok := pods[i].Annotations[resources.ProvisioningPodAnnotation]; ok {
 			return r.provisionReplicaScaleOut(ctx, mongodb, &pods[i], pods)
 		}
 	}
@@ -116,7 +107,7 @@ func (r *MongoDBReconciler) reconcileProgressing(ctx context.Context, mongodb *d
 
 func (r *MongoDBReconciler) listManagedReplicaPods(ctx context.Context, mongodb *dbv1beta1.MongoDB) ([]corev1.Pod, error) {
 	list := &corev1.PodList{}
-	if err := r.List(ctx, list, client.InNamespace(mongodb.Namespace), client.MatchingLabels(r.labels(mongodb))); err != nil {
+	if err := r.List(ctx, list, client.InNamespace(mongodb.Namespace), client.MatchingLabels(resources.Labels(mongodb))); err != nil {
 		return nil, fmt.Errorf("list managed replica Pods: %w", err)
 	}
 
@@ -398,7 +389,7 @@ func topologyMemberForID(members []mdb.Member, memberID int) (mdb.Member, bool) 
 }
 
 func (r *MongoDBReconciler) markPodDraining(ctx context.Context, pod *corev1.Pod) error {
-	if pod.Annotations[drainingPodAnnotation] != "" {
+	if pod.Annotations[resources.DrainingPodAnnotation] != "" {
 		return nil
 	}
 
@@ -406,7 +397,7 @@ func (r *MongoDBReconciler) markPodDraining(ctx context.Context, pod *corev1.Pod
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	pod.Annotations[drainingPodAnnotation] = "selected"
+	pod.Annotations[resources.DrainingPodAnnotation] = "selected"
 
 	if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
 		return fmt.Errorf("mark Pod %s/%s as draining: %w", pod.Namespace, pod.Name, err)
@@ -439,7 +430,7 @@ func (r *MongoDBReconciler) drainReplicaScaleIn(ctx context.Context, mongodb *db
 
 	topology, config, err := discovery.ClusterTopology(ctx, pods, mongodb.Name+"-r-a", r.discoveryManagerForPod)
 	if err != nil {
-		// TODO: we will likely want to either waitForReconciliation or return a ReconciliationError, depending on the content of the error returned
+		// TODO: we will likely want to either waitForReconciliation or return a blocking error, depending on the content of the error returned
 		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-in is waiting for a current replica set topology: %v", err), 15*time.Second)
 	}
 
@@ -570,18 +561,18 @@ func (r *MongoDBReconciler) markDrainedPVC(ctx context.Context, mongodb *dbv1bet
 	if pvc.Labels == nil {
 		pvc.Labels = make(map[string]string)
 	}
-	pvc.Labels[pvcStatusLabel] = pvcStatusJettisoned
+	pvc.Labels[resources.PVCStatusLabel] = resources.PVCStatusJettisoned
 	if pvc.Annotations == nil {
 		pvc.Annotations = make(map[string]string)
 	}
-	if pvc.Annotations[pvcJettisonedAtAnnotation] == "" {
-		pvc.Annotations[pvcJettisonedAtAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+	if pvc.Annotations[resources.PVCJettisonedAtAnnotation] == "" {
+		pvc.Annotations[resources.PVCJettisonedAtAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 
 	if checkpoint == nil {
-		delete(pvc.Annotations, pvcDataTimeAnnotation)
+		delete(pvc.Annotations, resources.PVCDataTimeAnnotation)
 	} else {
-		pvc.Annotations[pvcDataTimeAnnotation] = checkpoint.WallTime.UTC().Format(time.RFC3339Nano)
+		pvc.Annotations[resources.PVCDataTimeAnnotation] = checkpoint.WallTime.UTC().Format(time.RFC3339Nano)
 	}
 	if err := r.Patch(ctx, pvc, client.MergeFrom(before)); err != nil {
 		return fmt.Errorf("patch data PVC %s as jettisoned: %w", pvcName, err)
@@ -677,6 +668,7 @@ func (r *MongoDBReconciler) ensureInstanceManagerLeadershipAwayFrom(ctx context.
 // and creates the new replica's Pod, before calling provisionReplicaScaleOut to
 // perform the rest of the scale-out procedure.
 func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, pods []corev1.Pod) (ctrl.Result, error) {
+	kubeResources := r.kubernetesResources()
 	// 1. Assign a new replica ID (or derive it from a jettisoned PVC to be reclaimed)
 	candidateID, candidatePVC, err := r.getScaleOutReplicaCandidate(ctx, mongodb, pods)
 	if err != nil {
@@ -688,12 +680,12 @@ func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1
 		if err := r.reclaimReplicaPVC(ctx, candidatePVC); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reclaim PVC %s for scale-out: %w", candidatePVC.Name, err)
 		}
-	} else if err := r.ensurePVC(ctx, mongodb, candidateID); err != nil {
+	} else if err := kubeResources.EnsurePVC(ctx, mongodb, candidateID); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure scale-out PVC: %w", err)
 	}
 
 	// 3. Ensure replica Pod
-	pod, err := r.ensureReplicaPod(ctx, mongodb, candidateID)
+	pod, err := kubeResources.EnsureReplicaPod(ctx, mongodb, candidateID)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure replica Pod: %w", err)
 	}
@@ -732,7 +724,7 @@ func (r *MongoDBReconciler) provisionReplicaScaleOut(ctx context.Context, mongod
 	}
 
 	before := pod.DeepCopy()
-	delete(pod.Annotations, provisioningPodAnnotation)
+	delete(pod.Annotations, resources.ProvisioningPodAnnotation)
 
 	if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("clear provisioning annotation from Pod %s: %w", pod.Name, err)
@@ -742,9 +734,9 @@ func (r *MongoDBReconciler) provisionReplicaScaleOut(ctx context.Context, mongod
 
 func (r *MongoDBReconciler) reclaimReplicaPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
 	before := pvc.DeepCopy()
-	pvc.Labels[pvcStatusLabel] = pvcStatusInUse
-	delete(pvc.Annotations, pvcJettisonedAtAnnotation)
-	delete(pvc.Annotations, pvcDataTimeAnnotation)
+	pvc.Labels[resources.PVCStatusLabel] = resources.PVCStatusInUse
+	delete(pvc.Annotations, resources.PVCJettisonedAtAnnotation)
+	delete(pvc.Annotations, resources.PVCDataTimeAnnotation)
 
 	if err := r.Patch(ctx, pvc, client.MergeFrom(before)); err != nil {
 		return fmt.Errorf("patch PVC %s/%s: %w", pvc.Namespace, pvc.Name, err)
@@ -764,7 +756,7 @@ func (r *MongoDBReconciler) getScaleOutReplicaCandidate(ctx context.Context, mon
 	}
 
 	pvcList := &corev1.PersistentVolumeClaimList{}
-	if err := r.List(ctx, pvcList, client.InNamespace(mongodb.Namespace), client.MatchingLabels(r.labels(mongodb))); err != nil {
+	if err := r.List(ctx, pvcList, client.InNamespace(mongodb.Namespace), client.MatchingLabels(resources.Labels(mongodb))); err != nil {
 		return "", nil, fmt.Errorf("list managed replica PVCs: %w", err)
 	}
 	slices.SortFunc(pvcList.Items, func(a, b corev1.PersistentVolumeClaim) int { return cmp.Compare(a.Name, b.Name) })
@@ -778,11 +770,11 @@ func (r *MongoDBReconciler) getScaleOutReplicaCandidate(ctx context.Context, mon
 		if owner == nil || owner.UID != mongodb.UID || owner.Kind != dbv1beta1.MongoDBKind {
 			continue
 		}
-		if replicaPvc.Labels[pvcStatusLabel] != pvcStatusJettisoned {
+		if replicaPvc.Labels[resources.PVCStatusLabel] != resources.PVCStatusJettisoned {
 			continue
 		}
 
-		memberId := replicaPvc.Labels[pvcMemberLabel]
+		memberId := replicaPvc.Labels[resources.PVCMemberLabel]
 		replicaId, ok := strings.CutPrefix(memberId, "r-")
 		if !ok || replicaId == "" || !isReplicaID(replicaId) {
 			continue

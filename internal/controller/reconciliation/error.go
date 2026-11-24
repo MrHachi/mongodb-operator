@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package reconciliation
 
 import (
-	"context"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,44 +24,45 @@ import (
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 )
 
-// ReconciliationError reports a persistent condition that prevents safe
+// BlockingError reports a persistent condition that prevents safe
 // reconciliation.
-type ReconciliationError struct {
+type BlockingError struct {
 	Message string
 	Reason  string
 	// Affects lists operator-owned conditions to set to False.
 	Affects []string
 }
 
-func (e *ReconciliationError) Error() string {
+func (e *BlockingError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
 	return e.Message
 }
 
-func (r *MongoDBReconciler) setReconciliationErrorStatus(ctx context.Context, mongodb *dbv1beta1.MongoDB, reconciliationErr *ReconciliationError) error {
-	if reconciliationErr.Reason == "" {
-		return fmt.Errorf("reconciliation error has empty reason")
+// Conditions builds the blocking error's status conditions.
+func (e *BlockingError) Conditions() ([]metav1.Condition, error) {
+	if e.Reason == "" {
+		return nil, fmt.Errorf("reconciliation error has empty reason")
 	}
-	if reconciliationErr.Message == "" {
-		return fmt.Errorf("reconciliation error has empty message")
+	if e.Message == "" {
+		return nil, fmt.Errorf("reconciliation error has empty message")
 	}
-	if len(reconciliationErr.Affects) == 0 {
-		return fmt.Errorf("reconciliation error has no affected conditions")
+	if len(e.Affects) == 0 {
+		return nil, fmt.Errorf("reconciliation error has no affected conditions")
 	}
 
-	conditions := make([]metav1.Condition, 0, len(reconciliationErr.Affects))
-	for _, conditionType := range reconciliationErr.Affects {
+	conditions := make([]metav1.Condition, 0, len(e.Affects))
+	for _, conditionType := range e.Affects {
 		if conditionType != dbv1beta1.ConditionReady && conditionType != dbv1beta1.ConditionProgressing {
-			return fmt.Errorf("reconciliation error cannot affect condition %q", conditionType)
+			return nil, fmt.Errorf("reconciliation error cannot affect condition %q", conditionType)
 		}
 		conditions = append(conditions, metav1.Condition{
 			Type:    conditionType,
 			Status:  metav1.ConditionFalse,
-			Reason:  reconciliationErr.Reason,
-			Message: reconciliationErr.Message,
+			Reason:  e.Reason,
+			Message: e.Message,
 		})
 	}
-	return r.updateStatus(ctx, mongodb, mongodb.Status.Phase, conditions)
+	return conditions, nil
 }

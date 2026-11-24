@@ -30,17 +30,20 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
+	"github.com/MrHachi/mongodb-operator/internal/controller/reconciliation"
+	"github.com/MrHachi/mongodb-operator/internal/controller/resources"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
 )
 
 // reconcileInitializing handles the initialization phase of the MongoDB cluster.
 func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
+	kubeResources := r.kubernetesResources()
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling initialization phase", "name", mongodb.Name)
-	if err := r.ensureInstanceManagerBinding(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureInstanceManagerBinding(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager permissions: %w", err)
 	}
-	if err := r.ensureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureInstanceManagerCredentialsSecret(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure instance-manager credentials: %w", err)
 	}
 	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonDiscoveringCluster); err != nil {
@@ -62,7 +65,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.ensureKeyfileSecret(ctx, mongodb); err != nil {
+		if err := kubeResources.EnsureKeyfileSecret(ctx, mongodb); err != nil {
 			log.Error(err, "Failed to ensure keyfile secret", "name", mongodb.Name)
 			return ctrl.Result{}, fmt.Errorf("ensure keyfile secret: %w", err)
 		}
@@ -72,10 +75,10 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 			return ctrl.Result{}, err
 		}
 		// Proceed with initializing initial primary
-		if err := r.ensurePVC(ctx, mongodb, "a"); err != nil {
+		if err := kubeResources.EnsurePVC(ctx, mongodb, "a"); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial PVC: %w", err)
 		}
-		pod, err = r.ensureReplicaPod(ctx, mongodb, "a")
+		pod, err = kubeResources.EnsureReplicaPod(ctx, mongodb, "a")
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial replica pod: %w", err)
 		}
@@ -87,12 +90,12 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), "Waiting for managed Pods to become ready", 15*time.Second)
 	case discovery.PodsUnreachable:
 		// Ensure discovery networking before waiting for instance-manager endpoints.
-		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+		if err := kubeResources.EnsureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable", 15*time.Second)
 	case discovery.PodsWithoutPrimary:
-		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+		if err := kubeResources.EnsureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available", 15*time.Second)
@@ -107,22 +110,23 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 // reconcileSelectedPrimary is MongoDB-facing reconciliation logic.
 // Using the passed MongoDB primary node (Pod), it ensures that RS mode is initiated and that the admin user exists.
 func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod, createAdminSecret bool) (ctrl.Result, error) {
+	kubeResources := r.kubernetesResources()
 	log := logf.FromContext(ctx)
 
 	// This is critical to MongoDB SDAM, so we ensure it as a part of cluster reconciliation
-	if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
+	if err := kubeResources.EnsureHeadlessService(ctx, mongodb); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 	}
 
 	var adminSecret *corev1.Secret
 	if !createAdminSecret {
-		secret, err := r.loadAdminCredentialsSecret(ctx, mongodb)
+		secret, err := kubeResources.LoadAdminCredentialsSecret(ctx, mongodb)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		adminSecret = secret
 	} else {
-		secret, err := r.ensureAdminCredentialsSecret(ctx, mongodb)
+		secret, err := kubeResources.EnsureAdminCredentialsSecret(ctx, mongodb)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure admin credentials secret: %w", err)
 		}
@@ -142,7 +146,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 		// persistent block. Gate initiation on explicit bootstrap eligibility rather
 		// than only the Pod name.
 		if podName != fmt.Sprintf("%s-r-a", mongodb.Name) {
-			return ctrl.Result{}, &ReconciliationError{
+			return ctrl.Result{}, &reconciliation.BlockingError{
 				Reason:  dbv1beta1.ReasonReplicaSetUninitialized,
 				Message: fmt.Sprintf("Instance manager for Pod %s/%s reports an uninitialized replica set; refusing automatic initiation of a non-bootstrap member", mongodb.Namespace, podName),
 				Affects: []string{dbv1beta1.ConditionReady, dbv1beta1.ConditionProgressing},
@@ -167,8 +171,9 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingAdminUser); err != nil {
 		return ctrl.Result{}, err
 	}
-	username := string(adminSecret.Data[adminUsernameKey])
-	password := string(adminSecret.Data[adminPasswordKey])
+
+	username := string(adminSecret.Data[resources.AdminUsernameKey])
+	password := string(adminSecret.Data[resources.AdminPasswordKey])
 	if err := managerClient.CreateAdmin(ctx, username, password); err != nil {
 		return ctrl.Result{}, fmt.Errorf("create admin user: %w", err)
 	}
@@ -177,9 +182,9 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	}
 
 	// Remove provisioning annotation once cluster has been initialized
-	if _, ok := pod.Annotations[provisioningPodAnnotation]; ok {
+	if _, ok := pod.Annotations[resources.ProvisioningPodAnnotation]; ok {
 		before := pod.DeepCopy()
-		delete(pod.Annotations, provisioningPodAnnotation)
+		delete(pod.Annotations, resources.ProvisioningPodAnnotation)
 
 		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("clear provisioning annotation from initial Pod %s: %w", pod.Name, err)

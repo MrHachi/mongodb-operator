@@ -22,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
+	"github.com/MrHachi/mongodb-operator/internal/controller/resources"
 )
 
 func (r *MongoDBReconciler) reconcileReady(ctx context.Context, mongodb *dbv1beta1.MongoDB) (ctrl.Result, error) {
@@ -35,10 +36,10 @@ func (r *MongoDBReconciler) reconcileReady(ctx context.Context, mongodb *dbv1bet
 	}
 
 	for i := range pods {
-		if _, ok := pods[i].Annotations[drainingPodAnnotation]; ok {
+		if _, ok := pods[i].Annotations[resources.DrainingPodAnnotation]; ok {
 			return r.reconcileProgressing(ctx, mongodb)
 		}
-		if _, ok := pods[i].Annotations[provisioningPodAnnotation]; ok {
+		if _, ok := pods[i].Annotations[resources.ProvisioningPodAnnotation]; ok {
 			return r.reconcileProgressing(ctx, mongodb)
 		}
 	}
