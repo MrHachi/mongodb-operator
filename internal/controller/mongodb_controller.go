@@ -49,6 +49,7 @@ import (
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
 	controllerconfig "github.com/MrHachi/mongodb-operator/internal/controller/config"
+	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
 )
 
@@ -326,13 +327,8 @@ func (r *MongoDBReconciler) managerClientForPod(pod *corev1.Pod) *managerclient.
 	return managerclient.New(managerURL, r.KubeClient, r.Config.ServiceAccountNamespace, r.Config.ServiceAccountName)
 }
 
-func podReady(pod *corev1.Pod) bool {
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodReady {
-			return condition.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+func (r *MongoDBReconciler) discoveryManagerForPod(pod *corev1.Pod) discovery.Manager {
+	return r.managerClientForPod(pod)
 }
 
 func (r *MongoDBReconciler) loadAdminCredentialsSecret(ctx context.Context, mongodb *dbv1beta1.MongoDB) (*corev1.Secret, error) {

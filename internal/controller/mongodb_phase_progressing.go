@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
+	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
 	mdb "github.com/MrHachi/mongodb-operator/internal/mongodb"
 )
 
@@ -142,7 +143,7 @@ func (r *MongoDBReconciler) reconcileScaleIn(ctx context.Context, mongodb *dbv1b
 	}
 
 	// 1. Read replica-set status and election settings from MongoDB via the instance-manager
-	topology, config, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	topology, config, err := discovery.ClusterTopology(ctx, pods, mongodb.Name+"-r-a", r.discoveryManagerForPod)
 	if err != nil {
 		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-in is waiting for a current replica set topology: %v", err), 15*time.Second)
 	}
@@ -236,7 +237,7 @@ func stableMemberPods(topology *mdb.Topology, pods []corev1.Pod) (map[int]*corev
 	for i := range topology.Members {
 		member := &topology.Members[i]
 
-		if pod := podForMember(pods, member.Host); pod != nil {
+		if pod := discovery.PodForMember(pods, member.Host); pod != nil {
 			podsByMemberID[member.ID] = pod
 		}
 
@@ -293,7 +294,7 @@ func eligibleDrainSecondaries(members []mdb.Member, podsByMemberID map[int]*core
 		}
 
 		pod := podsByMemberID[member.ID]
-		if pod == nil || pod.Status.PodIP == "" || !podReady(pod) {
+		if pod == nil || !discovery.PodReadyWithIP(pod) {
 			continue
 		}
 
@@ -436,7 +437,7 @@ func (r *MongoDBReconciler) drainReplicaScaleIn(ctx context.Context, mongodb *db
 		return r.waitForReconciliation(ctx, mongodb, "ScaleInPending", fmt.Sprintf("Scale-in target Pod %s is no longer present", pod.Name), 15*time.Second)
 	}
 
-	topology, config, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	topology, config, err := discovery.ClusterTopology(ctx, pods, mongodb.Name+"-r-a", r.discoveryManagerForPod)
 	if err != nil {
 		// TODO: we will likely want to either waitForReconciliation or return a ReconciliationError, depending on the content of the error returned
 		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-in is waiting for a current replica set topology: %v", err), 15*time.Second)
@@ -501,8 +502,8 @@ func (r *MongoDBReconciler) drainReplicaScaleIn(ctx context.Context, mongodb *db
 		return r.waitForReconciliation(ctx, mongodb, "ScaleInDeferred", err.Error(), 15*time.Second)
 	}
 
-	primary := podForMember(pods, primaryHost(topology))
-	if primary == nil || primary.Status.PodIP == "" || !podReady(primary) {
+	primary := discovery.PodForMember(pods, primaryHost(topology))
+	if primary == nil || !discovery.PodReadyWithIP(primary) {
 		return r.waitForReconciliation(ctx, mongodb, "PrimaryUnavailable", "Scale-in is waiting for a Ready PRIMARY Pod to remove the replica-set member", 15*time.Second)
 	}
 
@@ -645,7 +646,7 @@ func optimeAtLeast(current, checkpoint mdb.Optime) bool {
 
 func topologyMemberForPod(topology *mdb.Topology, pods []corev1.Pod, pod *corev1.Pod) *mdb.Member {
 	for i := range topology.Members {
-		memberPod := podForMember(pods, topology.Members[i].Host)
+		memberPod := discovery.PodForMember(pods, topology.Members[i].Host)
 		if memberPod != nil && memberPod.Name == pod.Name {
 			return &topology.Members[i]
 		}
@@ -705,19 +706,19 @@ func (r *MongoDBReconciler) reconcileScaleOut(ctx context.Context, mongodb *dbv1
 // then joins it to the MongoDB cluster and removes the provisioning
 // annotation.
 func (r *MongoDBReconciler) provisionReplicaScaleOut(ctx context.Context, mongodb *dbv1beta1.MongoDB, pod *corev1.Pod, pods []corev1.Pod) (ctrl.Result, error) {
-	if pod.Status.PodIP == "" || !podReady(pod) {
+	if !discovery.PodReadyWithIP(pod) {
 		return r.waitForReconciliation(ctx, mongodb, "ScaleOutPending", fmt.Sprintf("Scale-out is waiting for replica Pod %s to become ready", pod.Name), 15*time.Second)
 	}
 
-	topology, _, err := r.discoverClusterTopology(ctx, mongodb, pods)
+	topology, _, err := discovery.ClusterTopology(ctx, pods, mongodb.Name+"-r-a", r.discoveryManagerForPod)
 	if err != nil {
 		return r.waitForReconciliation(ctx, mongodb, "TopologyUnavailable", fmt.Sprintf("Scale-out is waiting for a current replica set topology: %v", err), 15*time.Second)
 	}
 
 	member := topologyMemberForPod(topology, pods, pod)
 	if member == nil {
-		primary := podForMember(pods, primaryHost(topology))
-		if primary == nil || primary.Status.PodIP == "" || !podReady(primary) {
+		primary := discovery.PodForMember(pods, primaryHost(topology))
+		if primary == nil || !discovery.PodReadyWithIP(primary) {
 			return r.waitForReconciliation(ctx, mongodb, "PrimaryUnavailable", "Scale-out is waiting for a Ready PRIMARY Pod to add the replica-set member", 15*time.Second)
 		}
 

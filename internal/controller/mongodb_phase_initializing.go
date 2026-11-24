@@ -29,6 +29,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1beta1 "github.com/MrHachi/mongodb-operator/api/v1beta1"
+	"github.com/MrHachi/mongodb-operator/internal/controller/discovery"
 	managerclient "github.com/MrHachi/mongodb-operator/internal/manager/pkg/client"
 )
 
@@ -48,13 +49,16 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 
 	// Discover existing members before creating the default -r-a member. This
 	// prevents a reset phase from creating a new member beside existing data.
-	discovery, err := r.discoverPrimary(ctx, mongodb)
+	pods, err := r.listManagedReplicaPods(ctx, mongodb)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("discover replica set primary: %w", err)
 	}
+
+	primary := discovery.FindPrimary(ctx, pods, mongodb.Name+"-r-a", r.discoveryManagerForPod)
+
 	var pod *corev1.Pod
-	switch discovery.State {
-	case discoveryNoPods:
+	switch primary.State {
+	case discovery.NoPods:
 		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -63,7 +67,7 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 			return ctrl.Result{}, fmt.Errorf("ensure keyfile secret: %w", err)
 		}
 		fallthrough
-	case discoveryBootstrapPod:
+	case discovery.BootstrapPod:
 		if err := r.transitionInitializing(ctx, mongodb, dbv1beta1.ProgressReasonCreatingResources); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -75,29 +79,29 @@ func (r *MongoDBReconciler) reconcileInitializing(ctx context.Context, mongodb *
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure initial replica pod: %w", err)
 		}
-	case discoveryPrimaryFound:
+	case discovery.PrimaryFound:
 		// Given that the cluster is running in RS mode and we have a primary, we assume this cluster is already Initialized
 		// and move on to reconciling the discovered primary node
-		pod = discovery.Primary
-	case discoveryPodsNotReady:
+		pod = primary.Primary
+	case discovery.PodsNotReady:
 		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), "Waiting for managed Pods to become ready", 15*time.Second)
-	case discoveryPodsUnreachable:
+	case discovery.PodsUnreachable:
 		// Ensure discovery networking before waiting for instance-manager endpoints.
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonInstanceManagerUnavailable, "Managed Pod instance-manager endpoints are unavailable", 15*time.Second)
-	case discoveryPodsWithoutPrimary:
+	case discovery.PodsWithoutPrimary:
 		if err := r.ensureHeadlessService(ctx, mongodb); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensure headless service: %w", err)
 		}
 		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Managed Pods exist but no primary is available", 15*time.Second)
 	default:
-		return ctrl.Result{}, fmt.Errorf("discover replica set primary: unexpected discovery state %d", discovery.State)
+		return ctrl.Result{}, fmt.Errorf("discover replica set primary: unexpected discovery state %d", primary.State)
 	}
 
 	// Proceed with MongoDB cluster reconciliation, creating a new admin secret if we determined that this isn't a pre-existing cluster (no primary discovered)
-	return r.reconcileSelectedPrimary(ctx, mongodb, pod, discovery.State != discoveryPrimaryFound)
+	return r.reconcileSelectedPrimary(ctx, mongodb, pod, primary.State != discovery.PrimaryFound)
 }
 
 // reconcileSelectedPrimary is MongoDB-facing reconciliation logic.
@@ -126,7 +130,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	}
 
 	podName := pod.Name
-	if !podReady(pod) || pod.Status.PodIP == "" {
+	if !discovery.PodReadyWithIP(pod) {
 		return r.waitForReconciliation(ctx, mongodb, string(dbv1beta1.ProgressReasonWaitingForPod), fmt.Sprintf("Waiting for primary Pod %s to become ready", podName), 15*time.Second)
 	}
 
@@ -156,7 +160,7 @@ func (r *MongoDBReconciler) reconcileSelectedPrimary(ctx context.Context, mongod
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("get replica set topology: %w", err)
 	}
-	if !topologyHasPrimary(topology) {
+	if !discovery.TopologyHasPrimary(topology) {
 		return r.waitForReconciliation(ctx, mongodb, dbv1beta1.ReasonPrimaryUnavailable, "Replica set reports no PRIMARY member", 15*time.Second)
 	}
 
